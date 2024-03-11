@@ -40,7 +40,7 @@ class Body:
         angular_acc_result = torque_applied - self.M_inertia_inv@(-1*np.cross(angular_rate_initial,Hnet))
         return np.hstack([angular_rate_result, angular_acc_result])
     
-torque_applied = [5, 0 , 0]
+torque_applied = [0, 0 , 0]
 time_applied = 2 # time the force is applied
 
 point = Body()
