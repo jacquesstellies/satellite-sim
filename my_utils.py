@@ -4,8 +4,8 @@ import quaternion
 import numpy as np
 
 # rotate an object's moment of inertia about the xyz axes (in degrees)
-def rotate_M_inertia(M_inertia : np.array, direction : np.array):
-    dir = Rotation.from_euler('xyz', direction, degrees=True)
+def rotate_M_inertia(M_inertia : np.array, dir : Rotation):
+    
     dcm = dir.as_matrix()
     
     return dcm@M_inertia@np.transpose(dcm)
@@ -20,7 +20,7 @@ def calc_M_inertia_point_mass(pos : np.array, mass : float):
     Ixz = -pos[0]*pos[2]
     Iyz = -pos[1]*pos[2]
 
-    M_inertia = mass*[[Ixx, Ixy, Ixz],[Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]]
+    M_inertia = mass*np.array([[Ixx, Ixy, Ixz],[Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]])
 
     return M_inertia
 
