@@ -30,3 +30,6 @@ def conv_scipy_to_numpy_q(q : Rotation):
 
 def conv_numpy_to_scipy_q(q : np.quaternion):
     return Rotation.from_quat([q.x, q.y, q.z, q.w])
+
+def magnitude(vector): 
+    return math.sqrt(sum(pow(element, 2) for element in vector))
