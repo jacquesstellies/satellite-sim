@@ -90,10 +90,10 @@ class Controller:
 
     M_output_prev = 0
     def calc_torque_control_output(self, curr_q : np.quaternion,  angular_v : list[float], ref_q : np.quaternion) -> np.array:
-        k = 1
-        c1 = 1
-        c2 = 1
-        c3 = 1
+        k = 1.5
+        c1 = 1.2
+        c2 = 1.2
+        c3 = 1.2
         K = np.diag(np.full(3,k))
         C = np.diag([c1, c2, c3])
 
@@ -195,7 +195,8 @@ class Satellite(Body):
     wheels_control_enable = True
     _next_control_time_step = np.longdouble(0.1)
     wheels_H_new = np.zeros(3)
-    M_controller = np.zeros(3)
+    M_controller_com = np.zeros(3)
+    M_controller_real = np.zeros
     def calc_state(self, t, y):
         angular_v_input = y[:3]
         quaternion_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
@@ -203,36 +204,42 @@ class Satellite(Body):
         angular_acc_result = [0]*3
         quaternion_rate_result = np.quaternion(1,0,0,0)
         wheels_H_curr = np.zeros(3)
-        wheels_H_delta = np.zeros(3)
+        wheels_H_delta_com = np.zeros(3)
         # print(self._next_control_time_step)
         # print(t)
         
-        if t > self._next_control_time_step:
-            if self.controller_enable:
-                self.M_controller = self.controller.calc_torque_control_output(quaternion_input, angular_v_input, self.ref_q)
-                # print(f"M_controller {self.M_controller}")
-                if self.wheels_control_enable:
-                    wheels_H_delta = self.M_controller * controller.time_step
-                    self._next_control_time_step += controller.time_step
-                    # print(f"entered controller time space {t}")
-                    # logging.info(f"entered controller time space {t}")
-                
-
-                    if self.wheels is not None:
-                        for wheel in self.wheels:
-                            wheels_H_curr += wheel.calc_angular_momentum()
-
-                    self.wheels_H_new = wheels_H_delta + wheels_H_curr
-
-                    # print(f"wheels_H_delta {wheels_H_delta} wheels_H_curr {wheels_H_curr}")
-                    
-                    # print(f"wheels_H_new {self.wheels_H_new}")
+        if self.controller_enable:
         
-                    for wheel in wheels:
-                        wheel.update_angular_velocity(wheel.M_inertia_inv@(self.wheels_H_new*wheel.shaft_axis_mask))
-                        # print(f"wheel angular v {wheel.angular_v}")
-                        # print(f"wheel speed {wheel.speed}")
-                    
+            if t > self._next_control_time_step:
+                self.M_controller_com = self.controller.calc_torque_control_output(quaternion_input, angular_v_input, self.ref_q)
+                self._next_control_time_step += self.controller.time_step
+                # print(f"M_controller_com {self.M_controller_com}")
+                self._next_control_time_step += controller.time_step
+
+            if self.wheels_control_enable:
+                wheels_H_delta = self.M_controller_com * controller.time_step
+                # print(f"entered controller time space {t}")
+                # logging.info(f"entered controller time space {t}")
+            
+
+                if self.wheels is not None:
+                    for wheel in self.wheels:
+                        wheels_H_curr += wheel.calc_angular_momentum()
+
+                self.wheels_H_new = wheels_H_delta + wheels_H_curr
+
+                # print(f"wheels_H_delta {wheels_H_delta} wheels_H_curr {wheels_H_curr}")
+                
+                # print(f"wheels_H_new {self.wheels_H_new}")
+
+                for wheel in wheels:
+                    wheel.update_angular_velocity(wheel.M_inertia_inv@(self.wheels_H_new*wheel.shaft_axis_mask))
+                    # print(f"wheel angular v {wheel.angular_v}")
+                    # print(f"wheel speed {wheel.speed}")
+            
+                # wheels_H_delta_real = self.wheels_H_new
+
+                # self.M_controller_real = wheels_H_delta_real/self.controller.time_step
 
         Hnet = self.M_inertia@(angular_v_input) + self.wheels_H_new
         angular_acc_result = self.M_inertia_inv@(self.M_controller - np.cross(angular_v_input,Hnet))
@@ -242,7 +249,8 @@ class Satellite(Body):
 
         quaternion_rate_result = 0.5*quaternion_input*inertial_v_quaternion
         quaternion_rate_result = [quaternion_rate_result.x, quaternion_rate_result.y, quaternion_rate_result.z, quaternion_rate_result.w]
-        return np.hstack([angular_acc_result, quaternion_rate_result, self.M_controller, [wheel.speed for wheel in self.wheels] ])
+
+        return np.hstack([angular_acc_result, quaternion_rate_result, self.M_controller_com, [wheel.speed for wheel in self.wheels] ])
         
 # END DEF class Satellite()
 
