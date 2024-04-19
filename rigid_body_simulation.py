@@ -7,9 +7,13 @@ import math
 import quaternion
 import my_utils
 import logging
+import csv
 # all units are in SI (m, s, N, kg.. etc)
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
+with open(file="data_logs.csv",mode="w+",newline='') as data_logs:
+    csv_writer = csv.writer(data_logs, delimiter='\t')
+    csv_reader = csv.reader(data_logs, delimiter='\t')
 class Body:
     dir_init_inertial = Rotation.from_quat([0,0,0,1])
 
@@ -61,6 +65,8 @@ class Wheel(Body):
         #     self.speed = 0
         #     self.angular_v = np.zeros(3)
 
+    def inject_fault(t):
+
 
     def update_speed(self, speed):
         self.speed = speed
@@ -73,12 +79,14 @@ class WheelModule():
 class Controller:
     type = "torque"
     types = ["torque", "reaction_wheel"]
-    M_max = 0
+    M_max = None
     M_min = 0
     time_step = np.longdouble(0.1)
     filter_coef = 0
+    k=1
+    c=1
 
-    def __init__(self, M_max = None, M_min = 0, type = "torque", filter_coef = 0.5, time_step=0.1):
+    def __init__(self, k, c, M_max = None, M_min = 0, type = "torque", filter_coef = 0.5, time_step=0.1):
         self.type = type
         self.M_max = M_max
         self.M_min = M_min
@@ -87,15 +95,15 @@ class Controller:
         else:
             raise Exception("filter coef must be between 0 and 1")
         self.time_step = np.longdouble(time_step)
+        self.k = k
+        if len(c) != 3:
+            raise("error c must be a list of length 3")
+        self.c = c
 
     M_output_prev = 0
     def calc_torque_control_output(self, curr_q : np.quaternion,  angular_v : list[float], ref_q : np.quaternion) -> np.array:
-        k = 1.5
-        c1 = 1.2
-        c2 = 1.2
-        c3 = 1.2
-        K = np.diag(np.full(3,k))
-        C = np.diag([c1, c2, c3])
+        K = np.diag(np.full(3,self.k))
+        C = np.diag(self.c)
 
         angular_v = np.array(angular_v)
         
@@ -115,8 +123,8 @@ class Controller:
         for i in range(3):
             if (self.M_max is not None) and (np.abs(M[i]) >= self.M_max):
                 M[i] = np.sign(M[i])*self.M_max
-            if np.abs(M[i]) <= self.M_min:
-                M[i] = 0
+            # if np.abs(M[i]) < self.M_min:
+            #     M[i] = 0
         return M
 
     def low_pass_filter(self, value, value_prev):
@@ -125,6 +133,11 @@ class Controller:
     def calc_wheel_control_output(self, torque, angular_momentum) -> list[float]:
         ref_angular_momentum = torque*self.control_time_step + angular_momentum
         return ref_angular_momentum
+
+
+# class WheelModule():
+#     def calc_angular_momentum(torque : np.array(), time_step):
+        
 
 class Satellite(Body):
 
@@ -196,7 +209,7 @@ class Satellite(Body):
     _next_control_time_step = np.longdouble(0.1)
     wheels_H_new = np.zeros(3)
     M_controller_com = np.zeros(3)
-    M_controller_real = np.zeros
+    M_controller_real = np.zeros(3)
     def calc_state(self, t, y):
         angular_v_input = y[:3]
         quaternion_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
@@ -207,6 +220,9 @@ class Satellite(Body):
         wheels_H_delta_com = np.zeros(3)
         # print(self._next_control_time_step)
         # print(t)
+        if self.wheels is not None:
+            for wheel in self.wheels:
+                wheels_H_curr += wheel.calc_angular_momentum()
         
         if self.controller_enable:
         
@@ -217,18 +233,13 @@ class Satellite(Body):
                 self._next_control_time_step += controller.time_step
 
             if self.wheels_control_enable:
-                wheels_H_delta = self.M_controller_com * controller.time_step
+                wheels_H_delta_com = self.M_controller_com * controller.time_step
                 # print(f"entered controller time space {t}")
                 # logging.info(f"entered controller time space {t}")
-            
 
-                if self.wheels is not None:
-                    for wheel in self.wheels:
-                        wheels_H_curr += wheel.calc_angular_momentum()
+                self.wheels_H_new = wheels_H_delta_com + wheels_H_curr
 
-                self.wheels_H_new = wheels_H_delta + wheels_H_curr
-
-                # print(f"wheels_H_delta {wheels_H_delta} wheels_H_curr {wheels_H_curr}")
+                # print(f"wheels_H_delta_com {wheels_H_delta_com} wheels_H_curr {wheels_H_curr}")
                 
                 # print(f"wheels_H_new {self.wheels_H_new}")
 
@@ -237,12 +248,11 @@ class Satellite(Body):
                     # print(f"wheel angular v {wheel.angular_v}")
                     # print(f"wheel speed {wheel.speed}")
             
-                # wheels_H_delta_real = self.wheels_H_new
 
-                # self.M_controller_real = wheels_H_delta_real/self.controller.time_step
-
-        Hnet = self.M_inertia@(angular_v_input) + self.wheels_H_new
-        angular_acc_result = self.M_inertia_inv@(self.M_controller - np.cross(angular_v_input,Hnet))
+        # self.M_controller_real = wheels_H_delta/self.controller.time_step
+        # Hnet = self.M_inertia@(angular_v_input) 
+        Hnet = self.M_inertia@(angular_v_input) + wheels_H_curr
+        angular_acc_result = self.M_inertia_inv@(self.M_controller_com - np.cross(angular_v_input,Hnet))
 
         # put the inertial velocity in quaternion form
         inertial_v_quaternion = np.quaternion(0, angular_v_input[0], angular_v_input[1], angular_v_input[2])
@@ -277,11 +287,12 @@ def init_reaction_wheels(mass, radius, height):
 if __name__ == '__main__':
     # logging.basicConfig(filename="logs.log", filemode="w+", level=logging.INFO)
     # logger.info("satellite simulation logs")
-    data_logs = open(file="data_logs.log",mode="w+")
-    data_logs.write("")
-
-    controller = Controller(M_max=0.2, M_min=0.001, filter_coef=0.1, time_step=0.1)
-    wheels = init_reaction_wheels(mass=0.5, radius=0.03, height=0.01)
+    # axes = ['x','y','z']
+    # csv_writer.writerow(np.hstack[["controller_torque_" + axis for axis in axes],["wheel_speed_" + axis for axis in axes]])
+    c = [1.7, 1.7, 1.7]
+    k = 0.5
+    controller = Controller(k=k, c=c, M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
+    wheels = init_reaction_wheels(mass=0.31, radius=0.066, height=0.025)
 
     satellite = Satellite(wheels=wheels, controller=controller)
 
@@ -298,7 +309,7 @@ if __name__ == '__main__':
     time_applied = 2 # time the moment is applied
 
     # Control Variables
-    satellite.ref_q = Rotation.from_euler("xyz", [0, 45, 0], degrees=True)
+    satellite.ref_q = Rotation.from_euler("xyz", [0, 45, 45], degrees=True)
     satellite.controller_enable = True
     satellite.wheels_control_enable = True
 
@@ -306,7 +317,7 @@ if __name__ == '__main__':
     initial_values = np.hstack([satellite_angular_v, quaternion_init, M_init, np.zeros(3)])
 
     # Simulation parameters
-    sim_time = 10
+    sim_time = 150
     sim_output_resolution_time = 1
 
     # Integrate satellite dynamics over time
@@ -387,11 +398,11 @@ if __name__ == '__main__':
             plt.xlabel('time (s)')
             plt.ylabel(f'torque {axis} (N)')
 
-            pos_2 = i+cols*3+1
-            plt.subplot(rows,cols,pos_2)
-            plt.plot(sol.t, wheels_speeds[i]*60/(2*math.pi)) 
-            plt.xlabel('time (s)')
-            plt.ylabel(f'wheel speed {axis}')
+            # pos_2 = i+cols*3+1
+            # plt.subplot(rows,cols,pos_2)
+            # plt.plot(sol.t, wheels_speeds[i]*60/(2*math.pi)) 
+            # plt.xlabel('time (s)')
+            # plt.ylabel(f'wheel speed {axis}')
 
     plt.subplots_adjust(wspace=1, hspace=0.2)
     plt.show()
