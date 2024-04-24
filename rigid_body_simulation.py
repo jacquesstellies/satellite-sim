@@ -14,6 +14,18 @@ import csv
 with open(file="data_logs.csv",mode="w+",newline='') as data_logs:
     csv_writer = csv.writer(data_logs, delimiter='\t')
     csv_reader = csv.reader(data_logs, delimiter='\t')
+
+class Fault():
+    time = 0
+    enabled = False
+    master_enable = True
+    type = "catastrophic"
+    wheel_num = 0
+
+    def __init__(self, time, wheel_num, type):
+        self.time = time
+        self.wheel_num = wheel_num
+        self.type=type
 class Body:
     dir_init_inertial = Rotation.from_quat([0,0,0,1])
 
@@ -32,6 +44,7 @@ class Wheel(Body):
     speed = 0
     shaft_axis_mask = None
 
+    fault : Fault = None 
     speed_min = 0.1
     def __init__(self, mass, radius, height, dir_init_inertial=None):
         self.mass = mass
@@ -59,22 +72,17 @@ class Wheel(Body):
         return angular_momentum*self.shaft_axis_mask
     
     def update_angular_velocity(self, angular_v: np.array):
-        self.angular_v = angular_v*self.shaft_axis_mask
-        self.speed = my_utils.magnitude(angular_v)
-        # if self.speed < self.speed_min:
-        #     self.speed = 0
-        #     self.angular_v = np.zeros(3)
-
-    def inject_fault(t):
+        if (self.fault is not None and self.fault.enabled) or self.speed >= self.speed_min:
+            self.speed = 0
+            self.angular_v = np.zeros(3)
+        else:
+            self.angular_v = angular_v*self.shaft_axis_mask
+            self.speed = my_utils.magnitude(angular_v)
 
 
     def update_speed(self, speed):
         self.speed = speed
-        self.angular_v = speed
-        
-    
-class WheelModule():
-    H = 0
+        self.angular_v = speed        
 
 class Controller:
     type = "torque"
@@ -85,8 +93,8 @@ class Controller:
     filter_coef = 0
     k=1
     c=1
-
-    def __init__(self, k, c, M_max = None, M_min = 0, type = "torque", filter_coef = 0.5, time_step=0.1):
+    fault : Fault = None
+    def __init__(self, k, c, fault=None, M_max = None, M_min = 0, type = "torque", filter_coef = 0.5, time_step=0.1):
         self.type = type
         self.M_max = M_max
         self.M_min = M_min
@@ -99,6 +107,7 @@ class Controller:
         if len(c) != 3:
             raise("error c must be a list of length 3")
         self.c = c
+        self.fault = fault
 
     M_output_prev = 0
     def calc_torque_control_output(self, curr_q : np.quaternion,  angular_v : list[float], ref_q : np.quaternion) -> np.array:
@@ -115,8 +124,9 @@ class Controller:
 
         M_output = self.limit_torque(M_output)
         
-        M_output = self.low_pass_filter(M_output, self.M_output_prev)
+        M_output = self.low_pass_filter(M_output, self.M_output_prev, self.filter_coef)
 
+        M_output = self.inject_fault(M_output)
         return M_output
     
     def limit_torque(self, M):
@@ -127,55 +137,87 @@ class Controller:
             #     M[i] = 0
         return M
 
-    def low_pass_filter(self, value, value_prev):
-        return (self.filter_coef)*value_prev + (1 - self.filter_coef)*value
+    def low_pass_filter(self, value, value_prev, coeff):
+        return (coeff)*value_prev + (1 - coeff)*value
 
     def calc_wheel_control_output(self, torque, angular_momentum) -> list[float]:
         ref_angular_momentum = torque*self.control_time_step + angular_momentum
         return ref_angular_momentum
 
-
-# class WheelModule():
-#     def calc_angular_momentum(torque : np.array(), time_step):
+    _torque_prev = 0
+    def inject_fault(self, M):
+        if self.fault.wheel_num > 2:
+            raise("invaled fault injection wheel_num")
+        if self.fault.enabled is False:
+            return M
         
+        if self.fault.type == "catastrophic":
+            M[self.fault.wheel_num] = 0
+        elif self.fault.type == "comm_delay":
+            self._torque_prev = M[self.fault.wheel_num]
+            M[self.fault.wheel_num] = self.low_pass_filter(M[self.fault.wheel_num], self._torque_prev, 0.99)
+            limit = 0.005*self.M_max
+            if abs(M[self.fault.wheel_num]) > limit:
+                M[self.fault.wheel_num] == limit*np.sign(M[self.fault.wheel_num])
+        else:
+            raise("invaled fault type")
+        # print(M)
+        return M
+        
+
+class WheelModule():
+    angular_momentum = np.zeros(3)
+    angular_velocity = np.zeros(3)
+    wheels = None
+    config = ""
+    def __init__(self, mass, radius, height, config="standard"):
+        self.wheels = [Wheel(mass, radius, height) for wheel in range(3)]
+        if config == "standard":
+            if len(self.wheels) == 3:
+                self.wheels[0].calc_M_inertia([0,90,0])
+                self.wheels[1].calc_M_inertia([90,0,0])
+                self.wheels[2].calc_M_inertia([0,0,0])
+
+                self.wheels[0].shaft_axis_mask = [1,0,0]
+                self.wheels[1].shaft_axis_mask = [0,1,0]
+                self.wheels[2].shaft_axis_mask = [0,0,1]
+            # elif len(wheels) == 1:
+            #     self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
+            else:
+                raise(Exception("error unable to set up wheel configuration"))
+
+    def get_angular_momentum(self):
+        return self.angular_momentum
+
+    def update_angular_momentum(self, torque : np.array, time_step : float):
+        wheels_H_delta_com = torque * time_step
+        self.angular_momentum = wheels_H_delta_com + self.angular_momentum
+
+        for wheel in self.wheels:
+            wheel.update_angular_velocity(wheel.M_inertia_inv@(self.angular_momentum*wheel.shaft_axis_mask))
+        
+        return self.angular_momentum
 
 class Satellite(Body):
 
     logger = None
-    wheels = None # array storing wheel objects associated with the satellite
     wheel_offset = 0 # offset of wheel center of mass from edge of device
-    
-    controller : Controller = None
-    num_wheels = 0
 
-    def __init__(self, wheels : list[Wheel], controller : Controller, wheel_offset = 0, wheel_config = "standard", wheel_axes = 'x', logger = None):
-        if wheels is not None:
-            self.wheels = wheels
-            self.num_wheels = len(self.wheels)
-            if wheel_config == "standard":
-                if len(wheels) == 3:
-                    self.wheels[0].position[0] = self.dimensions['x']-wheel_offset
-                    self.wheels[1].position[1] = self.dimensions['y']-wheel_offset
-                    self.wheels[2].position[2] = self.dimensions['z']-wheel_offset
+    _controller : Controller = None
+    _wheel_module : WheelModule = None
+    _fault : Fault = None
 
-                    self.wheels[0].calc_M_inertia([0,90,0])
-                    self.wheels[1].calc_M_inertia([90,0,0])
-                    self.wheels[2].calc_M_inertia([0,0,0])
-
-                    for idx,wheel in enumerate(wheels):
-                        print(f"wheel[{idx}] \n {wheel.M_inertia} \n {wheel.M_inertia_inv}")
-
-                    self.wheels[0].shaft_axis_mask = [1,0,0]
-                    self.wheels[1].shaft_axis_mask = [0,1,0]
-                    self.wheels[2].shaft_axis_mask = [0,0,1]
-                elif len(wheels) == 1:
-                    self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
-                else:
-                    raise(Exception("error unable to set up wheel configuration"))
-
-        self.controller = controller
+    def __init__(self, _wheel_module : WheelModule, controller : Controller, fault : Fault, wheel_offset = 0, logger = None):
+        self._wheel_module = wheel_module
+        if _wheel_module.config == "standard":
+            self._wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
+            self._wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
+            self._wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
+        self._controller = controller
         self._next_control_time_step = controller.time_step
         self.logger = logger
+        self._fault = fault
+
 
     def calc_M_inertia_body(self):
 
@@ -188,11 +230,11 @@ class Satellite(Body):
 
     def calc_M_inertia_peri(self):
         M_inertia = np.zeros((3,3))
-        if self.wheels is not None:
+        if self._wheel_module.wheels is not None:
             M_inertia_indv_wheels = 0
             M_inertia_point_mass_wheels = 0
 
-            for wheel in self.wheels:
+            for wheel in self._wheel_module.wheels:
                 M_inertia_indv_wheels += wheel.M_inertia
                 M_inertia_point_mass_wheels += my_utils.calc_M_inertia_point_mass(wheel.position, self.mass)
 
@@ -218,40 +260,33 @@ class Satellite(Body):
         quaternion_rate_result = np.quaternion(1,0,0,0)
         wheels_H_curr = np.zeros(3)
         wheels_H_delta_com = np.zeros(3)
-        # print(self._next_control_time_step)
-        # print(t)
-        if self.wheels is not None:
-            for wheel in self.wheels:
-                wheels_H_curr += wheel.calc_angular_momentum()
+
+        # if self._wheel_module.wheels is not None:
+        #     wheels_H_curr = self._wheel_module.get_angular_momentum()
+            # for wheel in self.wheels:
+            #     wheels_H_curr += wheel.calc_angular_momentum()
         
         if self.controller_enable:
         
             if t > self._next_control_time_step:
-                self.M_controller_com = self.controller.calc_torque_control_output(quaternion_input, angular_v_input, self.ref_q)
-                self._next_control_time_step += self.controller.time_step
-                # print(f"M_controller_com {self.M_controller_com}")
-                self._next_control_time_step += controller.time_step
+                self.M_controller_com = self._controller.calc_torque_control_output(quaternion_input, angular_v_input, self.ref_q)
+                self._next_control_time_step += self._controller.time_step
 
             if self.wheels_control_enable:
-                wheels_H_delta_com = self.M_controller_com * controller.time_step
-                # print(f"entered controller time space {t}")
-                # logging.info(f"entered controller time space {t}")
+                self._wheel_module.update_angular_momentum(self.M_controller_com, self._controller.time_step)
+                # wheels_H_delta_com = self.M_controller_com * _controller.time_step
 
-                self.wheels_H_new = wheels_H_delta_com + wheels_H_curr
+                # self.wheels_H_new = wheels_H_delta_com + wheels_H_curr
 
-                # print(f"wheels_H_delta_com {wheels_H_delta_com} wheels_H_curr {wheels_H_curr}")
-                
-                # print(f"wheels_H_new {self.wheels_H_new}")
-
-                for wheel in wheels:
-                    wheel.update_angular_velocity(wheel.M_inertia_inv@(self.wheels_H_new*wheel.shaft_axis_mask))
-                    # print(f"wheel angular v {wheel.angular_v}")
-                    # print(f"wheel speed {wheel.speed}")
+                # for wheel in wheels:
+                #     wheel.update_angular_velocity(wheel.M_inertia_inv@(self.wheels_H_new*wheel.shaft_axis_mask))
             
-
-        # self.M_controller_real = wheels_H_delta/self.controller.time_step
-        # Hnet = self.M_inertia@(angular_v_input) 
-        Hnet = self.M_inertia@(angular_v_input) + wheels_H_curr
+        if t > self._fault.time and self._fault.master_enable:
+            self._fault.enabled = True
+            # print(f"fault enabled: {self._controller.fault.enabled}")
+        # self.M_controller_real = wheels_H_delta/self._controller.time_step
+        # Hnet = self.M_inertia@(angular_v_input) + self._wheel_module.get_angular_momentum()
+        Hnet = self.M_inertia@(angular_v_input)
         angular_acc_result = self.M_inertia_inv@(self.M_controller_com - np.cross(angular_v_input,Hnet))
 
         # put the inertial velocity in quaternion form
@@ -260,7 +295,7 @@ class Satellite(Body):
         quaternion_rate_result = 0.5*quaternion_input*inertial_v_quaternion
         quaternion_rate_result = [quaternion_rate_result.x, quaternion_rate_result.y, quaternion_rate_result.z, quaternion_rate_result.w]
 
-        return np.hstack([angular_acc_result, quaternion_rate_result, self.M_controller_com, [wheel.speed for wheel in self.wheels] ])
+        return np.hstack([angular_acc_result, quaternion_rate_result, self.M_controller_com, [wheel.speed for wheel in self._wheel_module.wheels] ])
         
 # END DEF class Satellite()
 
@@ -278,23 +313,24 @@ def calc_yaw_pitch_roll_rates(data_in):
 
     return [yaw, pitch, roll, yaw_rate, pitch_rate, roll_rate]
 
-def init_reaction_wheels(mass, radius, height):
-    wheel_x = Wheel(mass, radius, height)
-    wheel_y = Wheel(mass, radius, height)
-    wheel_z = Wheel(mass, radius, height)
-    return [wheel_x, wheel_y, wheel_z]
-
 if __name__ == '__main__':
     # logging.basicConfig(filename="logs.log", filemode="w+", level=logging.INFO)
     # logger.info("satellite simulation logs")
     # axes = ['x','y','z']
     # csv_writer.writerow(np.hstack[["controller_torque_" + axis for axis in axes],["wheel_speed_" + axis for axis in axes]])
+    
+    fault = Fault(time=0, wheel_num=1, type="comm_delay")
+    fault.master_enable = True
+
+    wheel_module = WheelModule(mass=0.31, radius=0.066, height=0.025, config="standard")
+    wheel_module.wheels[fault.wheel_num].fault = fault
+
     c = [1.7, 1.7, 1.7]
     k = 0.5
     controller = Controller(k=k, c=c, M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
-    wheels = init_reaction_wheels(mass=0.31, radius=0.066, height=0.025)
+    controller.fault = fault
 
-    satellite = Satellite(wheels=wheels, controller=controller)
+    satellite = Satellite(wheel_module, controller, fault)
 
     # Satellite Properties
     satellite.mass = 12 # 6U Sat weight limit
@@ -305,19 +341,17 @@ if __name__ == '__main__':
     satellite_angular_v = np.array([0,0,0])
     satellite.dir_init_inertial = Rotation.from_quat([0,0,0,1])
 
-    M_init = [0, 0, 0]
-    time_applied = 2 # time the moment is applied
-
     # Control Variables
-    satellite.ref_q = Rotation.from_euler("xyz", [0, 45, 45], degrees=True)
+    satellite.ref_q = Rotation.from_euler("xyz", [90, 90, 90], degrees=True)
     satellite.controller_enable = True
     satellite.wheels_control_enable = True
 
     quaternion_init = satellite.dir_init_inertial.as_quat()
+    M_init = [0, 0, 0]
     initial_values = np.hstack([satellite_angular_v, quaternion_init, M_init, np.zeros(3)])
 
     # Simulation parameters
-    sim_time = 150
+    sim_time = 100
     sim_output_resolution_time = 1
 
     # Integrate satellite dynamics over time
