@@ -87,13 +87,12 @@ def calc_control_output(q, angular_v):
 # M = calc_control_output(np.quaternion(1,0,0,1), [0,0,1])
 # print(M)
 
-def rotate_M_inertia(M_inertia : np.array, direction : np.array):
-    dir = Rotation.from_euler('xyz', direction, degrees=True)
-    dcm = dir.as_matrix()
+# def rotate_M_inertia(M_inertia : np.array, direction : np.array):
+#     dir = Rotation.from_euler('xyz', direction, degrees=True)
+#     dcm = dir.as_matrix()
     
-    return dcm@M_inertia@np.transpose(dcm)
+#     return dcm@M_inertia@np.transpose(dcm)
 
-print(rotate_M_inertia(np.diag([1,1,3]), [90,0,0]))
-print(rotate_M_inertia(np.diag([1,1,3]), [0,90,0]))
-print(rotate_M_inertia(np.diag([1,1,3]), [0,0,90]))
-    
+# print(rotate_M_inertia(np.diag([1,1,3]), [90,0,0]))
+# print(rotate_M_inertia(np.diag([1,1,3]), [0,90,0]))
+# print(rotate_M_inertia(np.diag([1,1,3]), [0,0,90]))
