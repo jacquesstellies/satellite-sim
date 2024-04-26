@@ -2,19 +2,26 @@ import numpy as np
 from numpy import cos, sin, tan, arccos, arcsin, arctan
 from scipy.integrate import solve_ivp
 from scipy.spatial.transform import Rotation
+import scipy.interpolate as interpolate
 import matplotlib.pyplot as plt
 import math
 import quaternion
 import my_utils
 import logging
-import csv
+import pandas as pd
+import argparse
+import toml
+import datetime
+import control
 # all units are in SI (m, s, N, kg.. etc)
 
 # logger = logging.getLogger(__name__)
-with open(file="data_logs.csv",mode="w+",newline='') as data_logs:
-    csv_writer = csv.writer(data_logs, delimiter='\t')
-    csv_reader = csv.reader(data_logs, delimiter='\t')
 
+results_data = {}
+
+axes = ['x','y','z']
+q_axes = axes[:]
+q_axes.append('w')
 class Fault():
     time = 0
     enabled = False
@@ -294,10 +301,21 @@ class Satellite(Body):
 
         quaternion_rate_result = 0.5*quaternion_input*inertial_v_quaternion
         quaternion_rate_result = [quaternion_rate_result.x, quaternion_rate_result.y, quaternion_rate_result.z, quaternion_rate_result.w]
-
-        return np.hstack([angular_acc_result, quaternion_rate_result, self.M_controller_com, [wheel.speed for wheel in self._wheel_module.wheels] ])
+        results_data['time'].append(t)
+        for i in range(3):
+            results_data['torque_'+ axes[i]].append(self.M_controller_com[i])
+            # results_data['angular_acc_'+ axes[i]].append(angular_acc_result[i])
+        
+        control_power_result = self.M_controller_com * angular_v_input
+        return np.hstack([angular_acc_result, quaternion_rate_result, control_power_result])
         
 # END DEF class Satellite()
+
+def output_to_csv():
+    df = pd.DataFrame().from_dict(results_data)
+    # dt_string = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+    # df.to_csv(fr'.\data_logs\log_{dt_string}.csv',sep=',')
+    df.to_csv(fr'.\data_logs\log.csv',sep=',')
 
 def calc_yaw_pitch_roll_rates(data_in):
     
@@ -313,133 +331,122 @@ def calc_yaw_pitch_roll_rates(data_in):
 
     return [yaw, pitch, roll, yaw_rate, pitch_rate, roll_rate]
 
+def interpolate_data(data, time_series, time_series_new):
+    return np.interp(time_series_new, time_series, data)
+
 if __name__ == '__main__':
     # logging.basicConfig(filename="logs.log", filemode="w+", level=logging.INFO)
     # logger.info("satellite simulation logs")
-    with open(file="data_logs.csv",mode="w+",newline='') as data_logs:
-        csv_writer = csv.writer(data_logs, delimiter='\t')
-        # csv_reader = csv.reader(data_logs, delimiter='\t')
-        axes = ['x','y','z']
-        csv_writer.writerow(np.hstack([["torque_" + axis for axis in axes],["wheel_speed_" + axis for axis in axes]]))
+    results_data["time"] = []
+    for axis in axes:
+        results_data["torque_" + axis] = []
+        # results_data["angular_acc_" + axis] = []
+        results_data["angular_rate_" + axis] = []
+    for axis in q_axes:
+        results_data["quaternion_" + axis] = []
 
-        fault = Fault(time=0, wheel_num=1, type="comm_delay")
-        fault.master_enable = True
+    fault = Fault(time=0, wheel_num=1, type="comm_delay")
+    fault.master_enable = False
 
-        wheel_module = WheelModule(mass=0.31, radius=0.066, height=0.025, config="standard")
-        wheel_module.wheels[fault.wheel_num].fault = fault
+    wheel_module = WheelModule(mass=0.31, radius=0.066, height=0.025, config="standard")
+    wheel_module.wheels[fault.wheel_num].fault = fault
 
-        c = [1.7, 1.7, 1.7]
-        k = 0.5
-        controller = Controller(k=k, c=c, M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
-        controller.fault = fault
+    c = [1.7, 1.7, 1.7]
+    k = 0.5
+    controller = Controller(k=k, c=c, M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
+    controller.fault = fault
 
-        satellite = Satellite(wheel_module, controller, fault)
+    satellite = Satellite(wheel_module, controller, fault)
 
-        # Satellite Properties
-        satellite.mass = 12 # 6U Sat weight limit
-        satellite.dimensions = {'x': 0.2, 'y': 0.1, 'z': 0.3405} # 6U Sat dimension limit
-        satellite.calc_M_inertia()
+    # Satellite Properties
+    satellite.mass = 12 # 6U Sat weight limit
+    satellite.dimensions = {'x': 0.2, 'y': 0.1, 'z': 0.3405} # 6U Sat dimension limit
+    satellite.calc_M_inertia()
 
-        # Satellite Initial Conditions
-        satellite_angular_v = np.array([0,0,0])
-        satellite.dir_init_inertial = Rotation.from_quat([0,0,0,1])
+    # Satellite Initial Conditions
+    satellite_angular_v = np.array([0,0,0])
+    satellite.dir_init_inertial = Rotation.from_quat([0,0,0,1])
 
-        # Control Variables
-        satellite.ref_q = Rotation.from_euler("xyz", [0, 90, 0], degrees=True)
-        satellite.controller_enable = True
-        satellite.wheels_control_enable = True
+    # Control Variables
+    satellite.ref_q = Rotation.from_euler("xyz", [0, 180, 0], degrees=True)
+    satellite.controller_enable = True
+    satellite.wheels_control_enable = True
 
-        quaternion_init = satellite.dir_init_inertial.as_quat()
-        M_init = [0, 0, 0]
-        initial_values = np.hstack([satellite_angular_v, quaternion_init, M_init, np.zeros(3)])
+    quaternion_init = satellite.dir_init_inertial.as_quat()
+    control_power_init = [0, 0, 0]
+    initial_values = np.hstack([satellite_angular_v, quaternion_init, control_power_init])
 
-        # Simulation parameters
-        sim_time = 100
-        sim_output_resolution_time = 1
+    # Simulation parameters
+    sim_time = 100
+    sim_output_resolution_time = 0.1
+    sim_time_series = np.linspace(0, sim_time, int(sim_time/sim_output_resolution_time))
 
-        # Integrate satellite dynamics over time
-        sol = solve_ivp(fun=satellite.calc_state, t_span=[0, sim_time], y0=initial_values, method="RK45", 
-                        t_eval=range(0, sim_time, sim_output_resolution_time),
-                        max_step=0.01)
+    # Integrate satellite dynamics over time
+    sol = solve_ivp(fun=satellite.calc_state, t_span=[0, sim_time], y0=initial_values, method="RK45",
+                    t_eval=sim_time_series,
+                    max_step=0.1)
+    
+    fig = plt.figure(figsize=(13,6))
+    fig.tight_layout()
 
-        fig = plt.figure(figsize=(13,6))
-        fig.tight_layout()
+    for axis in axes:
+        results_data[f'torque_{axis}'] = interpolate_data(results_data[f'torque_{axis}'], results_data['time'], sim_time_series)[:]
+    results_data['time'] = sim_time_series
 
-        angular_rate = sol.y[:3]
-        sat_quaternion = sol.y[3:7]
-        controller_torque_output = np.diff(sol.y[7:10], prepend=0)/np.diff(sol.t, prepend=0)
-        wheels_speeds = np.diff(sol.y[10:13], prepend=0)/np.diff(sol.t, prepend=0)
+    for i,axis in enumerate(axes):
+        results_data[f'angular_rate_{axis}'] = sol.y[i]
 
-        yaw_pitch_roll_output = False
+    for i,axis in enumerate(q_axes):
+        results_data[f'quaternion_{axis}'] = sol.y[i+3]
 
-        if( not yaw_pitch_roll_output):
-            cols = 4
-            rows = 4
-            axis = ''
-            for i in range(4):
-                if i == 0:
-                    axis = 'x'
-                elif i == 1:
-                    axis = 'y'
-                elif i == 2:
-                    axis = 'z'
-                elif i == 3:
-                    axis = 'w'
-                if i < 3:
-                    plt.subplot(rows,cols,i+1)
-                    plt.plot(sol.t, angular_rate[i]) 
-                    plt.xlabel('time (s)')
-                    plt.ylabel(f'{axis} angular rate (rad/s)')
+    control_energy_arr = sol.y[7:]
+    control_energy = {}
+    for i,axis in enumerate(axes):
+        control_energy[axis] = np.sum(control_energy_arr[i])
+    
+    print(control_energy)
 
-                plt.subplot(rows,cols,i+5)
-                plt.plot(sol.t, sat_quaternion[i]) 
-                plt.xlabel('time (s)')
-                plt.ylabel(f'quaternion {axis}')
-            
-        else:
-            cols = 3
-            rows = 3
-            # Convert data to yaw pitch and roll
-            y_transpose = [list(x) for x in zip(*sol.y)] # transpose columns and rows
-            yaw_pitch_roll_values = list(map(calc_yaw_pitch_roll_rates,y_transpose))
-            yaw_pitch_roll_values = [list(x) for x in zip(*yaw_pitch_roll_values)]
+    # output_to_csv()
+    # yaw_pitch_roll_output = False
+    # if( not yaw_pitch_roll_output):
+    cols = 4
+    rows = [ 'angular_rate', 'quaternion', 'torque']
 
-            for i in range(cols):
-                if(i==0):
-                    title = 'yaw'
-                elif(i==1):
-                    title = 'pitch'
-                elif(i==2):
-                    title = 'roll'
-                plt.subplot(rows,cols,i+1)
-                plt.plot(sol.t, yaw_pitch_roll_values[i])
-                plt.xlabel('time (s)')
-                plt.ylabel(f'{title} angle (rad)')
-
-                plt.subplot(rows,cols,i+4)
-                plt.plot(sol.t, yaw_pitch_roll_values[i+3]) 
-                plt.xlabel('time (s)')
-                plt.ylabel(f'{title} angular rate (rad/s)')
+    for row_idx, row in enumerate(rows):
+        pos = cols*row_idx+1
         
-        for i in range(cols):
-            if i == 0:
-                axis = 'x'
-            elif i == 1:
-                axis = 'y'
-            elif i == 2:
-                axis ='z'
-            if i < 3:
-                pos = i+cols*2+1
-                plt.subplot(rows,cols,pos)
-                plt.plot(sol.t, controller_torque_output[i])
+        for col_idx,axis in enumerate(axes if row != 'quaternion' else q_axes):
+                plt.subplot(len(rows),cols,pos+col_idx)
+                name = row + "_" + axis
+                plt.plot(results_data['time'], results_data[name])
                 plt.xlabel('time (s)')
-                plt.ylabel(f'torque {axis} (N)')
+                plt.ylabel(f' {name} (N)')
+        
+        # else:
 
-                # pos_2 = i+cols*3+1
-                # plt.subplot(rows,cols,pos_2)
-                # plt.plot(sol.t, wheels_speeds[i]*60/(2*math.pi)) 
-                # plt.xlabel('time (s)')
-                # plt.ylabel(f'wheel speed {axis}')
+        #     # Convert data to yaw pitch and roll
+        #     y_transpose = [list(x) for x in zip(*sol.y)] # transpose columns and rows
+        #     yaw_pitch_roll_values = list(map(calc_yaw_pitch_roll_rates,y_transpose))
+        #     yaw_pitch_roll_values = [list(x) for x in zip(*yaw_pitch_roll_values)]
 
-        plt.subplots_adjust(wspace=1, hspace=0.2)
-        plt.show()
+        #     for i in range(cols):
+        #         if(i==0):
+        #             title = 'yaw'
+        #         elif(i==1):
+        #             title = 'pitch'
+        #         elif(i==2):
+        #             title = 'roll'
+        #         plt.subplot(rows,cols,i+1)
+        #         plt.plot(sol.t, yaw_pitch_roll_values[i])
+        #         plt.xlabel('time (s)')
+        #         plt.ylabel(f'{title} angle (rad)')
+
+        #         plt.subplot(rows,cols,i+4)
+        #         plt.plot(sol.t, yaw_pitch_roll_values[i+3]) 
+        #         plt.xlabel('time (s)')
+        #         plt.ylabel(f'{title} angular rate (rad/s)')
+
+    plt.subplots_adjust(wspace=1, hspace=0.2)
+    plt.show()
+
+
