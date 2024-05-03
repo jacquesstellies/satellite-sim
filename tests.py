@@ -1,12 +1,10 @@
-import rigid_body_simulation as rbs
 import pytest
 import numpy as np
-import my_utils
+import src.my_utils as my_utils
 from scipy.spatial.transform import Rotation
-controller = rbs.Controller()
+import src.body
 
-# sat = rbs.Satellite()
-
+controller = src.body.Controller()
 
 def test_torque_limiter():
     limit = 0.5
@@ -16,7 +14,7 @@ def test_torque_limiter():
 
 
 def test_wheel_M_inertia():
-    wheel = rbs.Wheel(0.5, 1, 0.5)
+    wheel = src.body.Wheel(0.5, 1, 0.5)
     wheel.calc_M_inertia([0,90,0])
     cmp1 = wheel.M_inertia.round(3)
     cmp2 = my_utils.rotate_M_inertia(np.diag([0.13542, 0.13542, 0.25]), Rotation.from_euler('xyz',[0,90,0],degrees=True)).round(3)
