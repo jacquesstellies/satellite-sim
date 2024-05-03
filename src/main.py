@@ -6,7 +6,7 @@ import scipy.interpolate as interpolate
 import matplotlib.pyplot as plt
 import math
 import quaternion
-import my_utils
+import my_utils as my_utils
 import logging
 import pandas as pd
 import argparse
