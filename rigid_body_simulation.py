@@ -19,9 +19,6 @@ import control
 
 results_data = {}
 
-axes = ['x','y','z']
-q_axes = axes[:]
-q_axes.append('w')
 class Fault():
     time = 0
     enabled = False
@@ -167,8 +164,7 @@ class Controller:
             if abs(M[self.fault.wheel_num]) > limit:
                 M[self.fault.wheel_num] == limit*np.sign(M[self.fault.wheel_num])
         else:
-            raise("invaled fault type")
-        # print(M)
+            raise("invalid fault type")
         return M
         
 
@@ -303,19 +299,20 @@ class Satellite(Body):
         quaternion_rate_result = [quaternion_rate_result.x, quaternion_rate_result.y, quaternion_rate_result.z, quaternion_rate_result.w]
         results_data['time'].append(t)
         for i in range(3):
-            results_data['torque_'+ axes[i]].append(self.M_controller_com[i])
-            # results_data['angular_acc_'+ axes[i]].append(angular_acc_result[i])
+            results_data['torque_'+ my_utils.xyz_axes[i]].append(self.M_controller_com[i])
+            results_data['angular_acc_'+ my_utils.xyz_axes[i]].append(angular_acc_result[i])
         
         control_power_result = self.M_controller_com * angular_v_input
         return np.hstack([angular_acc_result, quaternion_rate_result, control_power_result])
         
 # END DEF class Satellite()
 
-def output_to_csv():
+def output_to_csv(file_name):
     df = pd.DataFrame().from_dict(results_data)
-    # dt_string = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
-    # df.to_csv(fr'.\data_logs\log_{dt_string}.csv',sep=',')
-    df.to_csv(fr'.\data_logs\log.csv',sep=',')
+    dt_string = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
+    file = open(fr'.\data_logs\{file_name}_{dt_string}.csv', 'w+')
+    df.to_csv(file,sep=',')
+    return file
 
 def calc_yaw_pitch_roll_rates(data_in):
     
@@ -335,25 +332,35 @@ def interpolate_data(data, time_series, time_series_new):
     return np.interp(time_series_new, time_series, data)
 
 if __name__ == '__main__':
+    
+    # Handle file parsing
+    parser = argparse.ArgumentParser(prog="rigid_body_simulation")
+    parser.add_argument("-l", "--log_output", help="filename to log ouptut", type=str)
+    args = vars(parser.parse_args())
+    log_file_name = args["log_output"]
+
+
+    with open('config.toml', 'r') as config_file:
+        config = toml.load(config_file)
     # logging.basicConfig(filename="logs.log", filemode="w+", level=logging.INFO)
     # logger.info("satellite simulation logs")
     results_data["time"] = []
-    for axis in axes:
+    for axis in my_utils.xyz_axes:
         results_data["torque_" + axis] = []
-        # results_data["angular_acc_" + axis] = []
+        results_data["angular_acc_" + axis] = []
         results_data["angular_rate_" + axis] = []
-    for axis in q_axes:
+    for axis in my_utils.q_axes:
         results_data["quaternion_" + axis] = []
 
     fault = Fault(time=0, wheel_num=1, type="comm_delay")
-    fault.master_enable = False
+    fault.master_enable = True
 
     wheel_module = WheelModule(mass=0.31, radius=0.066, height=0.025, config="standard")
     wheel_module.wheels[fault.wheel_num].fault = fault
 
-    c = [1.7, 1.7, 1.7]
-    k = 0.5
-    controller = Controller(k=k, c=c, M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
+    c = config['c']
+    k = config['k']
+    controller = Controller(k=config['k'], c=config['c'], M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
     controller.fault = fault
 
     satellite = Satellite(wheel_module, controller, fault)
@@ -368,7 +375,7 @@ if __name__ == '__main__':
     satellite.dir_init_inertial = Rotation.from_quat([0,0,0,1])
 
     # Control Variables
-    satellite.ref_q = Rotation.from_euler("xyz", [0, 180, 0], degrees=True)
+    satellite.ref_q = Rotation.from_euler("xyz", config['ref_euler_angle'], degrees=True)
     satellite.controller_enable = True
     satellite.wheels_control_enable = True
 
@@ -389,24 +396,72 @@ if __name__ == '__main__':
     fig = plt.figure(figsize=(13,6))
     fig.tight_layout()
 
-    for axis in axes:
-        results_data[f'torque_{axis}'] = interpolate_data(results_data[f'torque_{axis}'], results_data['time'], sim_time_series)[:]
+    # Put results into data object
+    for data in ['torque', 'angular_acc']:
+        for axis in my_utils.xyz_axes:
+            results_data[f'{data}_{axis}'] = interpolate_data(results_data[f'{data}_{axis}'], results_data['time'], sim_time_series)[:]
+    
     results_data['time'] = sim_time_series
 
-    for i,axis in enumerate(axes):
+    for i,axis in enumerate(my_utils.xyz_axes):
         results_data[f'angular_rate_{axis}'] = sol.y[i]
 
-    for i,axis in enumerate(q_axes):
+    for i,axis in enumerate(my_utils.q_axes):
         results_data[f'quaternion_{axis}'] = sol.y[i+3]
 
     control_energy_arr = sol.y[7:]
     control_energy = {}
-    for i,axis in enumerate(axes):
-        control_energy[axis] = np.sum(control_energy_arr[i])
+    control_energy_total = 0
+    for i,axis in enumerate(my_utils.xyz_axes):
+        control_energy[axis] = np.sum(np.abs(control_energy_arr[i]))
+        control_energy_total += control_energy[axis]
+    print(f"control energy {control_energy} | total: {control_energy_total}")
     
-    print(control_energy)
+    axes_commanded = []
+    for i, axis in enumerate(my_utils.xyz_axes):
+        if config['ref_euler_angle'][i] > 0:
+            axes_commanded.append(axis)
+    
+    axes_commanded.append('w')
 
-    # output_to_csv()
+    control_info = {}
+    accuracy = {}
+    settling_time = {}
+
+    def calc_control_info(axis : str, valid=True):
+        
+        if axis in my_utils.q_axes:
+            if valid:
+                control_info[axis] = control.step_info(sysdata=results_data[f"quaternion_{axis}"], T=results_data['time'])
+                ref_q_axis_value = my_utils.conv_Rotation_obj_to_dict(satellite.ref_q)[axis]
+                accuracy[axis] = np.abs((control_info[axis]['SteadyStateValue']-ref_q_axis_value)/ref_q_axis_value)
+                settling_time[axis] = control_info[axis]['SettlingTime']
+            elif not valid:
+                control_info[axis] = None
+                accuracy[axis] = None
+                settling_time[axis] = None
+        else:
+            raise(Exception(f'incorrect value for axis {axis}'))
+
+    if len(axes_commanded) < 2:
+        raise(Exception("no reference angle commanded"))
+    elif len(axes_commanded) == 2:
+        for axis in my_utils.q_axes:
+            if axis in axes_commanded:
+                calc_control_info(axis, True)
+            else:
+                calc_control_info(axis, False)
+    else:
+        for axis in my_utils.q_axes:
+            calc_control_info(axis)
+            
+    accuracy_percent = dict( (axis, accuracy[axis]*100 if accuracy[axis] is not None else None ) for axis in my_utils.q_axes)
+        
+    print(f"accuracy %: {accuracy}")
+    print(f"settling_time: {settling_time}")
+    
+    if log_file_name != None:
+        output_to_csv(log_file_name)
     # yaw_pitch_roll_output = False
     # if( not yaw_pitch_roll_output):
     cols = 4
@@ -415,12 +470,12 @@ if __name__ == '__main__':
     for row_idx, row in enumerate(rows):
         pos = cols*row_idx+1
         
-        for col_idx,axis in enumerate(axes if row != 'quaternion' else q_axes):
-                plt.subplot(len(rows),cols,pos+col_idx)
-                name = row + "_" + axis
-                plt.plot(results_data['time'], results_data[name])
-                plt.xlabel('time (s)')
-                plt.ylabel(f' {name} (N)')
+        for col_idx,axis in enumerate(my_utils.xyz_axes if row != 'quaternion' else my_utils.q_axes):
+            plt.subplot(len(rows),cols,pos+col_idx)
+            name = row + "_" + axis
+            plt.plot(results_data['time'], results_data[name])
+            plt.xlabel('time (s)')
+            plt.ylabel(f' {name} (N)')
         
         # else:
 

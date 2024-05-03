@@ -3,6 +3,9 @@ import math
 import quaternion
 import numpy as np
 
+xyz_axes = ['x', 'y', 'z']
+q_axes = ['x', 'y', 'z', 'w']
+
 # rotate an object's moment of inertia about the xyz axes (in degrees)
 def rotate_M_inertia(M_inertia : np.array, dir : Rotation):
     
@@ -33,3 +36,10 @@ def conv_numpy_to_scipy_q(q : np.quaternion):
 
 def magnitude(vector): 
     return math.sqrt(sum(pow(element, 2) for element in vector))
+
+def conv_Rotation_obj_to_dict(r : Rotation):
+    q_result = r.as_quat()
+    my_dict = {} 
+    for i, axis in enumerate(q_axes):
+        my_dict[axis] = q_result[i]
+    return my_dict
