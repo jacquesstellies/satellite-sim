@@ -11,12 +11,16 @@ class Fault():
     enabled = False
     master_enable = True
     type = "catastrophic"
-    wheel_num = 0
+    wheel_num = 'x'
+    torque_limit = 1
+    types = ["catastrophic", "comm_delay", "torque_limit"]
+    filter_coeff = 0
 
-    def __init__(self, time, wheel_num, type):
+    def __init__(self, time, wheel_axis, type, torque_limit):
         self.time = time
-        self.wheel_num = wheel_num
+        self.wheel_num = my_utils.xyz_axes.index(wheel_axis)
         self.type=type
+        self.torque_limit = torque_limit
 
 class Body:
     dir_init_inertial = Rotation.from_quat([0,0,0,1])
@@ -74,7 +78,7 @@ class Wheel(Body):
 
     def update_speed(self, speed):
         self.speed = speed
-        self.angular_v = speed        
+        self.angular_v = speed
 
 class Controller:
     type = "torque"
@@ -146,11 +150,14 @@ class Controller:
         if self.fault.type == "catastrophic":
             M[self.fault.wheel_num] = 0
         elif self.fault.type == "comm_delay":
+            M[self.fault.wheel_num] = self.low_pass_filter(M[self.fault.wheel_num], self._torque_prev, self.fault.filter_coeff)
             self._torque_prev = M[self.fault.wheel_num]
-            M[self.fault.wheel_num] = self.low_pass_filter(M[self.fault.wheel_num], self._torque_prev, 0.99)
-            limit = 0.005*self.M_max
+        elif self.fault.type == "torque_limit":
+            limit = self.fault.torque_limit*self.M_max
             if abs(M[self.fault.wheel_num]) > limit:
-                M[self.fault.wheel_num] == limit*np.sign(M[self.fault.wheel_num])
+                M[self.fault.wheel_num] = limit*np.sign(M[self.fault.wheel_num])
+        elif self.fault.type == "update_rate":
+            pass
         else:
             raise("invalid fault type")
         return M

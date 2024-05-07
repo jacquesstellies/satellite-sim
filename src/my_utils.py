@@ -43,3 +43,6 @@ def conv_Rotation_obj_to_dict(r : Rotation):
     for i, axis in enumerate(q_axes):
         my_dict[axis] = q_result[i]
     return my_dict
+
+def round_dict_values(d, k):
+    return {key: float(f"{value:.{k}E}") for key, value in d.items()}
