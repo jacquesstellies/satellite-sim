@@ -27,11 +27,11 @@ def calc_M_inertia_point_mass(pos : np.array, mass : float):
 
     return M_inertia
 
-def conv_scipy_to_numpy_q(q : Rotation):
+def conv_Rotation_obj_to_numpy_q(q : Rotation):
     q_result = q.as_quat()
     return np.quaternion(q_result[3], q_result[0], q_result[1], q_result[2])
 
-def conv_numpy_to_scipy_q(q : np.quaternion):
+def conv_numpy_to_Rotation_obj_q(q : np.quaternion):
     return Rotation.from_quat([q.x, q.y, q.z, q.w])
 
 def magnitude(vector): 
@@ -43,6 +43,10 @@ def conv_Rotation_obj_to_dict(r : Rotation):
     for i, axis in enumerate(q_axes):
         my_dict[axis] = q_result[i]
     return my_dict
+
+def conv_Rotation_obj_to_euler_int(r : Rotation):
+    alpha = np.arccos(0.5*(np.trace(r.as_matrix())-1))
+    return alpha
 
 def round_dict_values(d, k):
     return {key: float(f"{value:.{k}E}") for key, value in d.items()}

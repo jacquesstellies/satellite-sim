@@ -1,6 +1,14 @@
 ref_euler_angle = [90, 90, 45]
-c = [1.7, 1.7, 1.7]
+
+[controller]
+c = [1.7, 1.7, 1.0]
 k = 0.5
+T_max = 0.016
+T_min = 1e-5
+filter_coef = 0.5
+time_step = 0.1
+type="standard"
+adaptive_gain=0.1
 
 [fault]
 type = "comm_delay" # options = [catastrophic comm_delay torque_limit]
@@ -8,13 +16,15 @@ torque_limit = 0.05 # torque limit fraction
 filter_coef = 0.99
 wheel_axis = 'y'
 time = 0
-master_enable = true
+master_enable = false
 update_rate = 0.5
+
+[satellite]
 
 [simulation]
 duration = 100
 resolution = 0.1
 
 [output]
-accuracy_enable = true
+accuracy_enable = false
 energy_enable = true

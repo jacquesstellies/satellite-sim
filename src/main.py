@@ -14,11 +14,12 @@ import toml
 import datetime
 import control
 import body
+import my_globals
 # all units are in SI (m, s, N, kg.. etc)
 
 # logger = logging.getLogger(__name__)
 
-results_data = {}
+results_data = my_globals.results_data
 
 
 class Satellite(body.Body):
@@ -71,10 +72,10 @@ class Satellite(body.Body):
     ref_q = Rotation.from_quat([0,0,0,1])
     controller_enable = True
     wheels_control_enable = True
-    _next_control_time_step = np.longdouble(0.1)
+    _next_control_time_step = 0.1
     wheels_H_new = np.zeros(3)
-    M_controller_com = np.zeros(3)
-    M_controller_real = np.zeros(3)
+    T_controller_com = np.zeros(3)
+    T_controller_real = np.zeros(3)
     def calc_state(self, t, y):
         angular_v_input = y[:3]
         quaternion_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
@@ -92,12 +93,12 @@ class Satellite(body.Body):
         if self.controller_enable:
         
             if t > self._next_control_time_step:
-                self.M_controller_com = self._controller.calc_torque_control_output(quaternion_input, angular_v_input, self.ref_q)
+                self.T_controller_com = self._controller.calc_torque_control_output(quaternion_input, angular_v_input, self.ref_q)
                 self._next_control_time_step += self._controller.time_step
 
-            if self.wheels_control_enable:
-                self._wheel_module.update_angular_momentum(self.M_controller_com, self._controller.time_step)
-                # wheels_H_delta_com = self.M_controller_com * _controller.time_step
+            # if self.wheels_control_enable:
+            #     self._wheel_module.update_angular_momentum(self.T_controller_com, self._controller.time_step)
+                # wheels_H_delta_com = self.T_controller_com * _controller.time_step
 
                 # self.wheels_H_new = wheels_H_delta_com + wheels_H_curr
 
@@ -107,10 +108,12 @@ class Satellite(body.Body):
         if t > self._fault.time and self._fault.master_enable:
             self._fault.enabled = True
             # print(f"fault enabled: {self._controller.fault.enabled}")
-        # self.M_controller_real = wheels_H_delta/self._controller.time_step
+        # self.T_controller_real = wheels_H_delta/self._controller.time_step
         # Hnet = self.M_inertia@(angular_v_input) + self._wheel_module.get_angular_momentum()
+        # print("controller torque:")
+        # print(self.T_controller_com)
         Hnet = self.M_inertia@(angular_v_input)
-        angular_acc_result = self.M_inertia_inv@(self.M_controller_com - np.cross(angular_v_input,Hnet))
+        angular_acc_result = self.M_inertia_inv@(self.T_controller_com - np.cross(angular_v_input,Hnet))
 
         # put the inertial velocity in quaternion form
         inertial_v_quaternion = np.quaternion(0, angular_v_input[0], angular_v_input[1], angular_v_input[2])
@@ -119,18 +122,17 @@ class Satellite(body.Body):
         quaternion_rate_result = [quaternion_rate_result.x, quaternion_rate_result.y, quaternion_rate_result.z, quaternion_rate_result.w]
         results_data['time'].append(t)
         for i in range(3):
-            results_data['torque_'+ my_utils.xyz_axes[i]].append(self.M_controller_com[i])
+            results_data['torque_'+ my_utils.xyz_axes[i]].append(self.T_controller_com[i])
             results_data['angular_acc_'+ my_utils.xyz_axes[i]].append(angular_acc_result[i])
         
-        control_power_result = self.M_controller_com * angular_v_input
+        control_power_result = np.abs(self.T_controller_com * angular_v_input)
         return np.hstack([angular_acc_result, quaternion_rate_result, control_power_result])
-        
+    
 # END DEF class Satellite()
 
 def output_to_csv(file_name):
     df = pd.DataFrame().from_dict(results_data)
-    dt_string = datetime.datetime.now().strftime("%d-%m-%Y %H-%M-%S")
-    file = open(fr'.\data_logs\{file_name}_{dt_string}.csv', 'w+')
+    file = open(fr'..\data_logs\{file_name}.csv', 'w+')
     df.to_csv(file,sep=',')
     return file
 
@@ -191,8 +193,14 @@ if __name__ == '__main__':
     # Handle file parsing
     parser = argparse.ArgumentParser(prog="rigid_body_simulation")
     parser.add_argument("-l", "--log_output", help="filename to log ouptut", type=str)
+    parser.add_argument("-t", "--testing", help="removes date from log file names", action='store_true')
     args = vars(parser.parse_args())
     log_file_name = args["log_output"]
+    testing = args["testing"]
+
+    if not testing and log_file_name is not None:
+        dt_string = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+        log_file_name += f"_{dt_string}"
 
 
     with open('config.toml', 'r') as config_file:
@@ -216,10 +224,14 @@ if __name__ == '__main__':
 
     wheel_module = body.WheelModule(mass=0.31, radius=0.066, height=0.025, config="standard")
     wheel_module.wheels[fault.wheel_num].fault = fault
+    dir_init = Rotation.from_quat([0,0,0,1])
+    satellite_angular_v_init = np.array([0,0,0])
 
-    c = config['c']
-    k = config['k']
-    controller = body.Controller(k=config['k'], c=config['c'], M_max=0.016, M_min=0, filter_coef=0.5, time_step=0.01)
+
+    controller = body.Controller(k=config['controller']['k'], c=config['controller']['c'], T_max=config['controller']['T_max'], 
+                                 T_min=config['controller']['T_min'], filter_coef=config['controller']['filter_coef'], 
+                                 time_step=config['controller']['time_step'], type=config['controller']['type'],
+                                 angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init), adaptive_gain=1)
     controller.fault = fault
 
     satellite = Satellite(wheel_module, controller, fault)
@@ -230,8 +242,11 @@ if __name__ == '__main__':
     satellite.calc_M_inertia()
 
     # Satellite Initial Conditions
-    satellite_angular_v = np.array([0,0,0])
-    satellite.dir_init_inertial = Rotation.from_quat([0,0,0,1])
+    satellite.dir_init_inertial = dir_init
+
+    # Adaptive Controller Initialize
+    satellite._controller.M_inertia_inv_model = satellite.M_inertia_inv
+    satellite._controller.q_prev = my_utils.conv_Rotation_obj_to_numpy_q(satellite.dir_init_inertial)
 
     # Control Variables
     satellite.ref_q = Rotation.from_euler("xyz", config['ref_euler_angle'], degrees=True)
@@ -240,7 +255,7 @@ if __name__ == '__main__':
 
     quaternion_init = satellite.dir_init_inertial.as_quat()
     control_torque_init = [0, 0, 0]
-    initial_values = np.hstack([satellite_angular_v, quaternion_init, control_torque_init])
+    initial_values = np.hstack([satellite_angular_v_init, quaternion_init, control_torque_init])
 
     # Simulation parameters
     sim_time = config['simulation']['duration']
@@ -258,9 +273,19 @@ if __name__ == '__main__':
     #----------------------------------------------------------#
     ###################### Process Data ########################
     # Put results into data object
-    for data in ['torque', 'angular_acc']:
-        for axis in my_utils.xyz_axes:
-            results_data[f'{data}_{axis}'] = interpolate_data(results_data[f'{data}_{axis}'], results_data['time'], sim_time_series)[:]
+    # print(f"adaptive model output len {len(results_data['adaptive_model_output'])}")
+    # print(f"time series len {len(results_data['time'])}")
+    results = [('torque', True), ('angular_acc', True)]
+    if controller.type == "adaptive":
+        results.append(('adaptive_model_output', False))
+    for element in results:
+        data, multiple_axes = element
+        if multiple_axes:
+            for axis in my_utils.xyz_axes:
+                results_data[f'{data}_{axis}'] = interpolate_data(results_data[f'{data}_{axis}'], results_data['time'], sim_time_series)[:]
+        else: 
+            pass   
+            # results_data[f'{data}'] = interpolate_data(results_data[f'{data}'], np.linspace(0, sim_time, int(sim_time/controller.time_step)), sim_time_series)[:]
     
     results_data['time'] = sim_time_series
 
@@ -269,6 +294,15 @@ if __name__ == '__main__':
 
     for i,axis in enumerate(my_utils.q_axes):
         results_data[f'quaternion_{axis}'] = sol.y[i+3]
+    
+    results_data['euler_int'] = []
+    for row in range(len(results_data['time'])):
+        r : Rotation = Rotation.from_quat([results_data['quaternion_x'][row],
+                                          results_data['quaternion_y'][row],
+                                          results_data['quaternion_z'][row],
+                                          results_data['quaternion_w'][row]])
+        alpha = my_utils.conv_Rotation_obj_to_euler_int(r)
+        results_data['euler_int'].append(alpha)
 
     if config['output']['energy_enable']:
         control_energy_arr = sol.y[7:]
@@ -277,24 +311,30 @@ if __name__ == '__main__':
         for i,axis in enumerate(my_utils.xyz_axes):
             control_energy_per_axis[axis] = np.sum(np.abs(control_energy_arr[i]))
             control_energy_total += control_energy_per_axis[axis]
-            results_data[f'control_energy_{axis}'] = np.abs(control_energy_arr[i])
+            results_data[f'control_energy_{axis}'] = control_energy_arr[i]
         print(f"control energy (J): {my_utils.round_dict_values(control_energy_per_axis,3)} | total: {round(control_energy_total,3)}")
     
     
 
-    axes_commanded = []
-    for i, axis in enumerate(my_utils.xyz_axes):
-        if config['ref_euler_angle'][i] > 0:
-            axes_commanded.append(axis)
-    axes_commanded.append('w')
+    # axes_commanded = []
+    # for i, axis in enumerate(my_utils.xyz_axes):
+    #     if config['ref_euler_angle'][i] > 0:
+    #         axes_commanded.append(axis)
+    # axes_commanded.append('w')
 
     if config['output']['accuracy_enable']:
-        control_info, accuracy, settling_time = calc_control_data(axes_commanded)
+        # control_info, accuracy, settling_time = calc_control_data(axes_commanded)
 
-        accuracy_percent = dict( (axis, accuracy[axis]*100 if accuracy[axis] is not None else None ) for axis in my_utils.q_axes)
+        control_info = control.step_info(sysdata=results_data[f"euler_int"], T=results_data['time'])
+        euler_int_ref = my_utils.conv_Rotation_obj_to_euler_int(satellite.ref_q)
+        accuracy = np.abs((control_info['SteadyStateValue']-euler_int_ref)/euler_int_ref)
+        settling_time = control_info['SettlingTime']
+
+        # accuracy_percent = dict( (axis, accuracy[axis]*100 if accuracy[axis] is not None else None ) for axis in my_utils.q_axes)
+        accuracy_percent = accuracy*100
         
-        print(f"accuracy %: {my_utils.round_dict_values(accuracy_percent,3)}")
-        print(f"settling_time (s): {my_utils.round_dict_values(settling_time,3)}")
+        print(f"accuracy %: {accuracy}")
+        print(f"settling_time (s): {round(settling_time,3)}")
         final_q = [results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
         print(f"final attitude (quaternion): {[round(q,3) for q in final_q]}")
 
@@ -311,17 +351,29 @@ if __name__ == '__main__':
     fig.tight_layout()
 
     cols = 4
-    rows = [ 'angular_rate', 'quaternion', 'torque', 'control_energy']
+    rows = [ ('angular_rate','xyz'), ('quaternion','quaternion'), ('euler_int','none'), ('torque','xyz'), ('control_energy','xyz')]
+    
+    # if controller.type == "adaptive":
+    #     rows.append(('adaptive_model_output','none'))
 
     for row_idx, row in enumerate(rows):
+        row_name, axes_type = row
         pos = cols*row_idx+1
-        
-        for col_idx,axis in enumerate(my_utils.xyz_axes if row != 'quaternion' else my_utils.q_axes):
+        if axes_type == 'quaternion':
+            axes = my_utils.q_axes
+        elif axes_type == 'none':
+            axes = ['']
+        else:
+            axes = my_utils.xyz_axes
+        for col_idx,axis in enumerate(axes):
             plt.subplot(len(rows),cols,pos+col_idx)
-            name = row + "_" + axis
+            if axes_type != 'none': 
+                name = row_name + "_" + axis
+            else: 
+                name = row_name
             plt.plot(results_data['time'], results_data[name])
             plt.xlabel('time (s)')
-            plt.ylabel(f' {name} (N)')
+            plt.ylabel(f' {name}')
         
         # else:
 
@@ -348,6 +400,13 @@ if __name__ == '__main__':
         #         plt.ylabel(f'{title} angular rate (rad/s)')
 
     plt.subplots_adjust(wspace=1, hspace=0.5)
+    
+    # Make plot full screen
+    mng = plt.get_current_fig_manager()
+    mng.window.state('zoomed')
+
     plt.show()
+
+    fig.savefig(fr"..\data_logs\{log_file_name}.pdf", bbox_inches='tight')
 
 
