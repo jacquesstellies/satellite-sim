@@ -36,12 +36,17 @@ class Body:
 class Wheel(Body):
     dimensions = {'radius': 0, 'height': 0}
     position = np.zeros(3)
-    angular_v = np.zeros(3)
+    # angular_v = np.zeros(3)
     speed = 0
-    shaft_axis_mask = None
+    acceleration = 0
+    dir_vector = np.zeros(3)
+    friction_coef = 0.0001
+    
 
     fault : Fault = None 
-    speed_min = 0.1
+    min_speed = 0.1
+    max_speed = 10000
+    max_torque = 0.016
     def __init__(self, mass, radius, height, dir_init_inertial=None):
         self.mass = mass
         self.dimensions['radius'] = radius
@@ -50,36 +55,43 @@ class Wheel(Body):
             self.dir_init_inertial = Rotation.from_quat([0,0,0,1])
         my_globals.results_data['adaptive_model_output'] = []
     
-    def calc_M_inertia(self, direction):
+    def calc_M_inertia(self):
         # Moment of inertia
         self.M_inertia[0][0] = 0.25*self.mass*pow(self.dimensions['radius'],2) + (1/12)*self.mass*pow(self.dimensions['height'],2)
         self.M_inertia[1][1] = self.M_inertia[0][0]
         self.M_inertia[2][2] = 0.5*self.mass*pow(self.dimensions['radius'],2)
-        self.dir_init_inertial = Rotation.from_euler('xyz', direction, degrees=True) 
-        self.M_inertia = my_utils.rotate_M_inertia(self.M_inertia, self.dir_init_inertial) # @TBD look at floating point error here
-        self.M_inertia *= np.eye(1)
         self.calc_M_inertia_inv()
     
     # returns angular momentum
-    def calc_angular_momentum(self) -> np.array:
-        angular_momentum = self.M_inertia@self.angular_v
-        # print(f"angular v {self.angular_v}")
-        if np.isnan(angular_momentum[0]):
-            raise("Nan error")
-        return angular_momentum*self.shaft_axis_mask
+    # def calc_angular_momentum(self) -> np.array:
+    #     # angular_momentum = self.M_inertia@self.angular_v
+    #     # print(f"angular v {self.angular_v}")
+    #     if np.isnan(angular_momentum[0]):
+    #         raise("Nan error")
+    #     return self.speed*self.dir_vector
     
     def update_angular_velocity(self, angular_v: np.array):
-        if (self.fault is not None and self.fault.enabled) or self.speed >= self.speed_min:
+        if (self.fault is not None and self.fault.enabled) or self.speed >= self.min_speed:
             self.speed = 0
             self.angular_v = np.zeros(3)
         else:
-            self.angular_v = angular_v*self.shaft_axis_mask
+            self.angular_v = angular_v*self.dir_vector
             self.speed = my_utils.magnitude(angular_v)
 
 
     def update_speed(self, speed):
-        self.speed = speed
-        self.angular_v = speed
+        if np.abs(speed) > self.max_speed:
+            self.speed = self.max_speed*np.sign(speed)
+        else:
+            self.speed = speed
+        # self.speed = speed
+        
+    def update_acceleration(self, acceleration):
+        if self.speed < self.max_speed:
+            self.acceleration = acceleration
+        else:
+            self.acceleration = 0 
+        
 
 class Integrator:
     prev_val = None
@@ -247,30 +259,49 @@ class WheelModule():
     angular_velocity = np.zeros(3)
     wheels = None
     config = ""
-    def __init__(self, mass, radius, height, config="standard"):
+    def __init__(self, mass, radius, height, config="standard", max_speed=0, max_torque=0):
         self.wheels = [Wheel(mass, radius, height) for wheel in range(3)]
+        for i, wheel in enumerate(self.wheels):
+            wheel.max_speed = max_speed
+            wheel.max_torque = max_torque
+            my_globals.results_data['wheel_speed_' + str(i)] = []
         if config == "standard":
-            if len(self.wheels) == 3:
-                self.wheels[0].calc_M_inertia([0,90,0])
-                self.wheels[1].calc_M_inertia([90,0,0])
-                self.wheels[2].calc_M_inertia([0,0,0])
+            self.wheels[0].calc_M_inertia()
+            self.wheels[1].calc_M_inertia()
+            self.wheels[2].calc_M_inertia()
 
-                self.wheels[0].shaft_axis_mask = [1,0,0]
-                self.wheels[1].shaft_axis_mask = [0,1,0]
-                self.wheels[2].shaft_axis_mask = [0,0,1]
+            self.wheels[0].dir_vector = np.array([1,0,0])
+            self.wheels[1].dir_vector = np.array([0,1,0])
+            self.wheels[2].dir_vector = np.array([0,0,1])
             # elif len(wheels) == 1:
             #     self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
-            else:
-                raise(Exception("error unable to set up wheel configuration"))
+        else:
+            raise(Exception("error unable to set up wheel configuration"))
 
     def get_angular_momentum(self):
         return self.angular_momentum
-
-    def update_angular_momentum(self, torque : np.array, time_step):
-        wheels_H_delta_com = torque * time_step
-        self.angular_momentum = wheels_H_delta_com + self.angular_momentum
+    
+    def low_pass_filter(self, value, value_prev, coeff):
+        return (coeff)*value_prev + (1 - coeff)*value
+    
+    H_rate_prev = np.zeros(3)
+    def calc_state_rates(self, T_com : np.array, sampling_time):
+        H_input = np.zeros(3)
+        dH = np.zeros(3)
+        H_rate = np.zeros(3)
 
         for wheel in self.wheels:
-            wheel.update_angular_velocity(wheel.M_inertia_inv@(self.angular_momentum*wheel.shaft_axis_mask))
-        
-        return self.angular_momentum
+            H_input = H_input + wheel.speed*wheel.M_inertia[2][2]*wheel.dir_vector
+            
+        dH = sampling_time*(T_com)
+        H_result = dH + H_input
+        # H_rate = self.low_pass_filter(H_result, self.H_rate_prev, 0)
+        H_rate = H_result
+
+        for wheel in self.wheels:
+            wheel.update_speed((H_result@wheel.dir_vector)/wheel.M_inertia[2][2])
+            # acc = ((T_com@wheel.dir_vector)-wheel.friction_coef*wheel.speed)/wheel.M_inertia[2][2]
+            # wheel.update_acceleration(acc)
+            # H_rate = H_rate + wheel.acceleration*wheel.M_inertia[2][2]*wheel.dir_vector
+        # @TODO make torque zero when speed is zero
+        return H_rate, H_result
