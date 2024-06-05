@@ -1,5 +1,4 @@
 import numpy as np
-from numpy import cos, sin, tan, arccos, arcsin, arctan
 from scipy.integrate import solve_ivp
 from scipy.spatial.transform import Rotation
 import scipy.interpolate as interpolate
@@ -15,9 +14,8 @@ import datetime
 import control
 import body
 import my_globals
+import csv
 # all units are in SI (m, s, N, kg.. etc)
-
-# logger = logging.getLogger(__name__)
 
 results_data = my_globals.results_data
 
@@ -90,12 +88,6 @@ class Satellite(body.Body):
         
         sat_angular_acc_result = [0]*3
         quaternion_rate_result = np.quaternion(1,0,0,0)
-        wheels_H_curr = np.zeros(3)
-        wheels_H_delta_com = np.zeros(3)
-        # if self._wheel_module.wheels is not None:
-        #     wheels_H_curr = self._wheel_module.get_angular_momentum()
-            # for wheel in self.wheels:
-            #     wheels_H_curr += wheel.calc_angular_momentum()
         if self.controller_enable:
         
             if t > self._next_control_time_step:
@@ -105,23 +97,18 @@ class Satellite(body.Body):
                     self.T_controller_com = self.ref_T
                 self._next_control_time_step += self._controller.time_step
                 if self.wheels_control_enable:
-                    # wheels_speed_input = y[-4:-1]
                     self.wheels_H_rate_result, self.wheels_H_result = self._wheel_module.calc_state_rates(self.T_controller_com, controller.time_step)
-                    # self.wheels_H_rate_result, self.wheels_H_result, wheels_speed = self._wheel_module.calc_state_rates(self.T_controller_com, controller.time_step)
 
             if t > self._fault.time and self._fault.master_enable:
                 self._fault.enabled = True
-        # print("controller torque:")
-        # print(self.T_controller_com)
-        # T_applied = np.zeros(3)
+
         if self.wheels_control_enable:
             T_applied = self.wheels_H_rate_result
         else:
             T_applied = self.T_controller_com
-        # print(f"T applied {T_applied}")
+
         Hnet = self.M_inertia@(sat_angular_v_input) + self.wheels_H_result
         sat_angular_acc_result = self.M_inertia_inv@(T_applied - np.cross(sat_angular_v_input,Hnet))
-        # sat_angular_acc_result = self.M_inertia_inv@T_applied
 
         # put the inertial velocity in quaternion form
         inertial_v_quaternion = np.quaternion(0, sat_angular_v_input[0], sat_angular_v_input[1], sat_angular_v_input[2])
@@ -143,14 +130,12 @@ class Satellite(body.Body):
 
 
         results = [sat_angular_acc_result, quaternion_rate_result, control_power_result]
-        # if self.wheels_control_enable:
-        #     results.append(wheels_angular_acc_result)
         return np.hstack(results)
     
 # END DEF class Satellite()
 
-def output_to_csv(file_name):
-    df = pd.DataFrame().from_dict(results_data)
+def output_dict_to_csv(file_name, data):
+    df = pd.DataFrame().from_dict(data)
     file = open(fr'..\data_logs\{file_name}.csv', 'w+')
     df.to_csv(file,sep=',')
     return file
@@ -242,7 +227,7 @@ if __name__ == '__main__':
 
     wheels_config = config['wheels']
     wheel_module = body.WheelModule(wheels_config['mass'], wheels_config['radius'], wheels_config['height'], 
-                                    wheels_config['config'], wheels_config['max_speed_rpm']*np.pi/30, wheels_config['max_torque'])
+                                    wheels_config['config'], my_utils.conv_rpm_to_rads_per_sec(wheels_config['max_speed_rpm']), wheels_config['max_torque'])
     wheel_module.wheels[fault.wheel_num].fault = fault
     dir_init = Rotation.from_quat([0,0,0,1])
     satellite_angular_v_init = np.array([0,0,0])
@@ -296,10 +281,8 @@ if __name__ == '__main__':
     
     #----------------------------------------------------------#
     ###################### Process Data ########################
+    
     # Put results into data object
-    # results = [('torque', True), ('angular_acc', True),('wheel_speed', True)]
-    # if controller.type == "adaptive":
-    #     results.append(('adaptive_model_output', False))
     for key, value in results_data.items():
         if key == 'time':
             continue
@@ -357,10 +340,10 @@ if __name__ == '__main__':
         final_q = [results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
         print(f"final attitude (quaternion): {[round(q,3) for q in final_q]}")
 
-
-
     if log_file_name != None:
-        output_to_csv(log_file_name)
+        output_dict_to_csv(log_file_name + "_log", results_data)
+        output_dict_to_csv(log_file_name + "_config", config)
+
     # yaw_pitch_roll_output = False
     # if( not yaw_pitch_roll_output):
 

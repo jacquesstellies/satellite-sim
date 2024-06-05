@@ -50,3 +50,9 @@ def conv_Rotation_obj_to_euler_int(r : Rotation):
 
 def round_dict_values(d, k):
     return {key: float(f"{value:.{k}E}") for key, value in d.items()}
+
+def conv_rpm_to_rads_per_sec(value):
+    return value*np.pi/30
+
+def conv_rads_per_sec_to_rpm(value):
+    return value*30/np.pi

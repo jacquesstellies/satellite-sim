@@ -1,8 +1,8 @@
 [controller]
-c = [1,1,1]
-k = 1
+c = [12,12,12]
+k = 0.7
 T_max = 0.016
-T_min = 1e-5
+T_min = 0
 filter_coef = 0
 time_step = 0.1
 type="standard"

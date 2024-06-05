@@ -53,7 +53,6 @@ class Wheel(Body):
         self.dimensions['height'] = height
         if dir_init_inertial is None:
             self.dir_init_inertial = Rotation.from_quat([0,0,0,1])
-        my_globals.results_data['adaptive_model_output'] = []
     
     def calc_M_inertia(self):
         # Moment of inertia
@@ -144,6 +143,7 @@ class Controller:
             self.angular_v_prev = angular_v_init
             self.quaternion_prev = quaternion_init
             self.adaptive_gain = adaptive_gain
+            my_globals.results_data['adaptive_model_output'] = []
 
     T_output_prev = 0
     def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion) -> np.array:
