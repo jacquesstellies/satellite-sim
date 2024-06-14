@@ -143,20 +143,30 @@ class Controller:
             self.angular_v_prev = angular_v_init
             self.quaternion_prev = quaternion_init
             self.adaptive_gain = adaptive_gain
-            my_globals.results_data['adaptive_model_output'] = []
+            my_globals.results_data['control_adaptive_model_output'] = []
+            for i, axis in enumerate(my_utils.xyz_axes):
+                my_globals.results_data[f'control_theta_{axis}'] = []
+        print("controller type ", self.type)
+        print("adaptive gain ", self.adaptive_gain)
+        my_globals.results_data['control_time'] = []
 
     T_output_prev = 0
-    def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion) -> np.array:
+
+    def calc_closed_loop_control_torque(self, q_curr, angular_v, ref_q):
         K = np.diag(np.full(3,self.k))
         C = np.diag(self.c)
-
         angular_v = np.array(angular_v)
         
         q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(ref_q) # ref_q is already normalized
 
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
 
-        T_output = + K@q_error_vec - C@angular_v
+        return + K@q_error_vec - C@angular_v
+
+    def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion, t) -> np.array:
+
+        my_globals.results_data['control_time'].append(t)
+        T_output = self.calc_closed_loop_control_torque(q_curr, angular_v, ref_q)
 
         T_output = self.limit_torque(T_output)
         
@@ -164,7 +174,7 @@ class Controller:
         T_output = self.inject_fault(T_output)
         
         if self.type == "adaptive":
-            T_output = self.calc_adaptive_control_torque_output(T_output, q_curr)
+            T_output = self.calc_adaptive_control_torque_output(T_output, q_curr, ref_q)
 
         return T_output
     
@@ -176,34 +186,28 @@ class Controller:
     angular_v_prev = None
     q_prev : np.quaternion = None
     
-    def calc_adaptive_model_output(self, T_com):
-        
-        angular_v_result = self.angular_v_prev + self.M_inertia_inv_model@(T_com)*self.time_step
+    def calc_adaptive_model_output(self, ref_q):
+        T_model = self.calc_closed_loop_control_torque(self.q_prev, self.angular_v_prev, ref_q)
+        angular_v_result = self.angular_v_prev + self.M_inertia_inv_model@(T_model)*self.time_step
         self.angular_v_prev = angular_v_result
         inertial_v_q = np.quaternion(0, angular_v_result[0], angular_v_result[1], angular_v_result[2])
-        # print(self.q_prev)
-        # print(inertial_v_q)
         q_result = self.q_prev + 0.5*self.q_prev*inertial_v_q*self.time_step
         self.q_prev = q_result
         return q_result
 
     theta_prev = 0
-    def calc_adaptive_control_torque_output(self, T_com, q_meas : np.quaternion):
-        q_model = self.calc_adaptive_model_output(T_com)
-        y_model = my_utils.conv_numpy_to_Rotation_obj_q(q_model).as_euler("xyz",degrees=True) 
-        my_globals.results_data['adaptive_model_output'].append(my_utils.conv_Rotation_obj_to_euler_int(my_utils.conv_numpy_to_Rotation_obj_q(q_model)))
+    def calc_adaptive_control_torque_output(self, T_com, q_meas : np.quaternion, q_ref : np.quaternion):
+        q_model = self.calc_adaptive_model_output(q_ref)
+        my_globals.results_data['control_adaptive_model_output'].append(my_utils.conv_Rotation_obj_to_euler_int(my_utils.conv_numpy_to_Rotation_obj_q(q_model)))
+        q_error = q_meas.inverse()*q_model
+        q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
+        q_model_vec = np.array([q_model.x, q_model.y, q_model.z])
         
-        y_meas = my_utils.conv_numpy_to_Rotation_obj_q(q_meas).as_euler("xyz",degrees=True) 
-        error = y_meas - y_model
-        print(f"y_meas {y_meas}")
-        print(f"y_model {y_model}")
-        # print(f"error {error}")
-        
-        theta = self.theta_prev - error*self.adaptive_gain*y_model*error
-        print(f"theta {theta}")
+        theta = self.theta_prev - q_error_vec*self.adaptive_gain*q_model_vec*self.time_step
+        for i, axis in enumerate(my_utils.xyz_axes):
+            my_globals.results_data[f'control_theta_{axis}'].append(theta[i])
         self.theta_prev = theta
-        # theta=[1,1,1]
-        return T_com*theta
+        return T_com + T_com*theta
 
     def limit_torque(self, M):
         for i in range(3):
@@ -242,10 +246,6 @@ class Controller:
             raise("invalid fault type")
         return M
     
-    integrator_list : list[Integrator] = []
-    # curr_integrator = 0
-    # def reset_integrator_list(self):
-    #     self.curr_integrator = 0
 
     def integrate(self, value, integrator_number : int):
         if integrator_number not in self.integrator_list:
