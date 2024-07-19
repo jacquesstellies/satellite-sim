@@ -39,10 +39,10 @@ dimensions = {'x' = 0.3, 'y' = 0.3, 'z' = 0.3}
 mass = 50
 
 [simulation]
-enable = false
+enable = true
 duration = 100
 resolution = 0.1
-test_mode_en = true
+test_mode_en = false
 test_duration = 3
 test_resolution = 1
 
