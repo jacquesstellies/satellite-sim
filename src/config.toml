@@ -1,12 +1,13 @@
 [controller]
-c = [1.5,1.5,0.5]
-k = 1.7
-T_max = 0.016
+enable = true
+c = [3.0,3.0,3.0]
+k = 3
+T_max = 0.020
 T_min = 0
 filter_coef = 0
 time_step = 0.1
-type="adaptive"
-adaptive_gain = 1
+type="standard"
+adaptive_gain = 0.1
 
 [wheels]
 config = "standard"
@@ -26,15 +27,24 @@ master_enable = false
 update_rate = 0.5
 
 [satellite]
+euler_init_en = false
+euler_init = [0, 0, 0]
+q_init = [0,0,0,1]
 mode = "direction"
 ref_T = [0, 1, 0]
-ref_euler_angle = [90, 90, 90]
-wheels_control_enable = false
+ref_euler_angle = [0, 0, 45]
+wheels_control_enable = true
+
+dimensions = {'x' = 0.3, 'y' = 0.3, 'z' = 0.3}
+mass = 50
 
 [simulation]
 duration = 100
 resolution = 0.1
+test_mode_en = true
+test_duration = 3
+test_resolution = 1
 
 [output]
-accuracy_enable = true
+accuracy_enable = false
 energy_enable = true

@@ -20,7 +20,11 @@ import os
 
 results_data = my_globals.results_data
 
-
+class Face():
+    r_cop_to_com = np.zeros(3)
+    area = 0
+    norm_vec = np.zeros(3)
+    
 class Satellite(body.Body):
 
     logger = None
@@ -33,8 +37,12 @@ class Satellite(body.Body):
     mode : str = ""
     modes = ["direction", "torque"]
 
-    def __init__(self, _wheel_module : body.WheelModule, controller : body.Controller, fault : body.Fault, wheel_offset = 0, 
-                 logger = None, mode = "direction"):
+    dir_init_obc = Rotation.from_quat([0,0,0,1])
+
+    faces : list[Face] = []
+    _disturbances : body.Disturbances = None
+    def __init__(self, dimensions, mass, _wheel_module : body.WheelModule, controller : body.Controller, 
+                 fault : body.Fault, wheel_offset = 0, logger = None, mode = "direction"):
         self._wheel_module = wheel_module
         if _wheel_module.config == "standard":
             self._wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
@@ -47,6 +55,23 @@ class Satellite(body.Body):
         if mode not in self.modes:
             raise Exception(f"mode {mode} not available")
         self.mode = mode
+        self.dimensions, self.mass = dimensions, mass
+        self._disturbances = body.Disturbances()
+        self.calc_face_properties()
+
+    def calc_face_properties(self):
+        dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
+        for i in range(3):
+            for j in range(2):
+                face = Face()
+                face.norm_vec = np.zeros(3)
+                face.norm_vec[i] = 1*(1,-1) [j == 1]
+                face.area = 1
+                for k, axis in enumerate(face.norm_vec):
+                    if axis == 0:
+                        face.area *= dim_array[k]
+                face.r_cop_to_com = face.norm_vec*0.5*dim_array              
+                self.faces.append(face)
 
     def calc_M_inertia_body(self):
 
@@ -76,7 +101,6 @@ class Satellite(body.Body):
 
     ref_q = Rotation.from_quat([0,0,0,1])
     ref_T = np.zeros(3)
-    controller_enable = True
     wheels_control_enable = True
     _next_control_time_step = 0.1
     wheels_H_rate_result = np.zeros(3)
@@ -85,15 +109,14 @@ class Satellite(body.Body):
     T_controller_com = np.zeros(3)
     def calc_state_rates(self, t, y):
         sat_angular_v_input = y[:3]
-        quaternion_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
-        
+        q_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
         sat_angular_acc_result = [0]*3
-        quaternion_rate_result = np.quaternion(1,0,0,0)
-        if self.controller_enable:
+        q_rate_result = np.quaternion(1,0,0,0)
+        if self._controller.enable is True:
         
             if t > self._next_control_time_step:
                 if self.mode == "direction":
-                    self.T_controller_com = self._controller.calc_torque_control_output(quaternion_input, sat_angular_v_input, self.ref_q, t)
+                    self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, t)
                 elif self.mode == "torque":
                     self.T_controller_com = self.ref_T
                 self._next_control_time_step += self._controller.time_step
@@ -102,24 +125,28 @@ class Satellite(body.Body):
 
             if t > self._fault.time and self._fault.master_enable:
                 self._fault.enabled = True
-
         if self.wheels_control_enable:
-            T_applied = self.wheels_H_rate_result
+            T_controller = self.wheels_H_rate_result
         else:
-            T_applied = self.T_controller_com
+            T_controller = self.T_controller_com
+        
+        T_aero = self._disturbances.calc_aero_torque(satellite, q_input)
+        T_grav = self._disturbances.calc_grav_torque(satellite, q_input)
+        T_dist = T_aero + T_grav
 
         Hnet = self.M_inertia@(sat_angular_v_input) + self.wheels_H_result
-        sat_angular_acc_result = self.M_inertia_inv@(T_applied - np.cross(sat_angular_v_input,Hnet))
+        sat_angular_acc_result = self.M_inertia_inv@(T_controller + T_dist - np.cross(sat_angular_v_input,Hnet))
 
-        # put the inertial velocity in quaternion form
-        inertial_v_quaternion = np.quaternion(0, sat_angular_v_input[0], sat_angular_v_input[1], sat_angular_v_input[2])
+        # put the inertial velocity in q form
+        inertial_v_q = np.quaternion(0, sat_angular_v_input[0], sat_angular_v_input[1], sat_angular_v_input[2])
 
-        quaternion_rate_result = 0.5*quaternion_input*inertial_v_quaternion
-        quaternion_rate_result = [quaternion_rate_result.x, quaternion_rate_result.y, quaternion_rate_result.z, quaternion_rate_result.w]
+        q_rate_result = 0.5*q_input*inertial_v_q
+        q_rate_result = [q_rate_result.x, q_rate_result.y, q_rate_result.z, q_rate_result.w]
         results_data['time'].append(t)
         for i, axis in enumerate(my_utils.xyz_axes):
-            results_data['torque_'+ axis].append(T_applied[i])
+            results_data['torque_'+ axis].append(T_controller[i])
             results_data['angular_acc_'+ axis].append(sat_angular_acc_result[i])
+            results_data['T_dist_' + axis].append(T_dist[i])
             
         for i, wheel in enumerate(self._wheel_module.wheels):
             results_data['wheel_speed_' + str(i)].append(wheel.speed)
@@ -130,7 +157,7 @@ class Satellite(body.Body):
             control_power_result = np.abs(self.T_controller_com * sat_angular_v_input)
 
 
-        results = [sat_angular_acc_result, quaternion_rate_result, control_power_result]
+        results = [sat_angular_acc_result, q_rate_result, control_power_result]
         return np.hstack(results)
     
 # END DEF class Satellite()
@@ -227,6 +254,7 @@ if __name__ == '__main__':
         results_data["torque_" + axis] = []
         results_data["angular_acc_" + axis] = []
         results_data["angular_rate_" + axis] = []
+        results_data['T_dist_' + axis] = []
     for axis in my_utils.q_axes:
         results_data["quaternion_" + axis] = []
     
@@ -241,47 +269,50 @@ if __name__ == '__main__':
     wheel_module = body.WheelModule(wheels_config['mass'], wheels_config['radius'], wheels_config['height'], 
                                     wheels_config['config'], my_utils.conv_rpm_to_rads_per_sec(wheels_config['max_speed_rpm']), wheels_config['max_torque'])
     wheel_module.wheels[fault.wheel_num].fault = fault
-    dir_init = Rotation.from_quat([0,0,0,1])
+    if config['satellite']['euler_init_en']:
+        dir_init = Rotation.from_euler('xyz',config['satellite']['euler_init'],degrees=True)
+    else:
+        dir_init = Rotation.from_quat(config['satellite']['q_init'])
     satellite_angular_v_init = np.array([0,0,0])
 
 
-    controller = body.Controller(k=config['controller']['k'], c=config['controller']['c'], T_max=config['controller']['T_max'], 
+    controller = body.Controller(config['controller']['enable'], k=config['controller']['k'], c=config['controller']['c'], T_max=config['controller']['T_max'], 
                                  T_min=config['controller']['T_min'], filter_coef=config['controller']['filter_coef'], 
                                  time_step=config['controller']['time_step'], type=config['controller']['type'],
                                  angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init), 
                                  adaptive_gain=config['controller']['adaptive_gain'])
     controller.fault = fault
 
-    satellite = Satellite(wheel_module, controller, fault, mode=config['satellite']['mode'])
-
-    # Satellite Properties
-    satellite.mass = 12 # 6U Sat weight limit
-    satellite.dimensions = {'x': 0.2, 'y': 0.1, 'z': 0.3405} # 6U Sat dimension limit
+    satellite = Satellite(config['satellite']['dimensions'], config['satellite']['mass'],
+                          wheel_module, controller, fault, mode=config['satellite']['mode'])
+    
     satellite.calc_M_inertia()
 
     # Satellite Initial Conditions
-    satellite.dir_init_inertial = dir_init
+    satellite.dir_init_obc = dir_init
 
     # Adaptive Controller Initialize
     satellite._controller.M_inertia_inv_model = satellite.M_inertia_inv
-    satellite._controller.q_prev = my_utils.conv_Rotation_obj_to_numpy_q(satellite.dir_init_inertial)
+    satellite._controller.q_prev = my_utils.conv_Rotation_obj_to_numpy_q(satellite.dir_init_obc)
 
     # Control Variables
     satellite.ref_q = Rotation.from_euler("xyz", config['satellite']['ref_euler_angle'], degrees=True)
     satellite.ref_T = np.array(config['satellite']['ref_T'])
-    satellite.controller_enable = True
     satellite.wheels_control_enable = config['satellite']['wheels_control_enable']
 
-    quaternion_init = satellite.dir_init_inertial.as_quat()
+    quaternion_init = satellite.dir_init_obc.as_quat()
     control_torque_init = [0, 0, 0]
     initial_values = [satellite_angular_v_init, quaternion_init, control_torque_init]
     # if satellite.wheels_control_enable is True:
     #     initial_values.append(np.zeros(3))
 
     initial_values = np.hstack(initial_values)
+
     # Simulation parameters
-    sim_time = config['simulation']['duration']
-    sim_output_resolution_time = config['simulation']['resolution']
+    sim_config = config['simulation']
+    sim_time = sim_config['duration'] if not sim_config['test_mode_en'] else sim_config['test_duration']
+    sim_output_resolution_time = sim_config['resolution'] if not sim_config['test_mode_en'] else sim_config['test_resolution']
+    
     sim_time_series = np.linspace(0, sim_time, int(sim_time/sim_output_resolution_time))
 
     #-------------------------------------------------------------#
@@ -367,10 +398,10 @@ if __name__ == '__main__':
 
     cols = 4
     rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('torque',my_utils.xyz_axes), \
-            ('control_energy',my_utils.xyz_axes)]
+            ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
     
     if satellite.wheels_control_enable:
-        rows.append(('wheel_speed', ['1','2','3']))
+        rows.append(('wheel_speed', ['0','1','2']))
 
     if controller.type == "adaptive":
         rows.append(('control_adaptive_model_output',['none']))
