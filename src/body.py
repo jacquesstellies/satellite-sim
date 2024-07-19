@@ -23,7 +23,6 @@ class Fault():
         self.torque_limit = torque_limit
 
 class Body:
-    dir_init_inertial = Rotation.from_quat([0,0,0,1])
 
     mass = 0
     dimensions = {'x':0, 'y':0, 'z':0} # x, y and z dimensions
@@ -108,6 +107,7 @@ class Integrator:
         return integrand
     
 class Controller:
+    enable = True
     T_max = None
     T_min = 0
     time_step = 0.1
@@ -119,9 +119,10 @@ class Controller:
     types = ["standard", "adaptive"]
     adaptive_gain = 0
 
-    def __init__(self, k, c, fault=None, T_max = None, T_min = 0, 
+    def __init__(self, enable, k, c, fault=None, T_max = None, T_min = 0, 
                  filter_coef = 0.5, time_step=0.1, type="standard", adaptive_model_coeff=[0,0,0],
                  angular_v_init=None, quaternion_init=None, adaptive_gain=0):
+        self.enable = enable
         self.T_max = T_max
         self.T_min = T_min
         if filter_coef <= 1 or filter_coef >= 0:
@@ -284,24 +285,26 @@ class WheelModule():
     def low_pass_filter(self, value, value_prev, coeff):
         return (coeff)*value_prev + (1 - coeff)*value
     
-    H_rate_prev = np.zeros(3)
+    H_dot_prev = np.zeros(3)
     def calc_state_rates(self, T_com : np.array, sampling_time):
         H_input = np.zeros(3)
         dH = np.zeros(3)
-        H_rate = np.zeros(3)
+        H_dot = np.zeros(3)
 
         for wheel in self.wheels:
             H_input = H_input + wheel.speed*wheel.M_inertia[2][2]*wheel.dir_vector
             
         dH = sampling_time*(T_com)
         H_result = dH + H_input
-        # H_rate = self.low_pass_filter(H_result, self.H_rate_prev, 0)
-        H_rate = H_result
+        H_dot = self.low_pass_filter(T_com, self.H_dot_prev, 0.5)
 
         for wheel in self.wheels:
             wheel.update_speed((H_result@wheel.dir_vector)/wheel.M_inertia[2][2])
             # acc = ((T_com@wheel.dir_vector)-wheel.friction_coef*wheel.speed)/wheel.M_inertia[2][2]
             # wheel.update_acceleration(acc)
+            # H_dot = H_dot + wheel.acceleration*wheel.M_inertia[2][2]*wheel.dir_vector
+        # @TODO make torque zero when acc is zero
+        return H_dot, H_result
 
 class Orbit():
     altitude = 0
