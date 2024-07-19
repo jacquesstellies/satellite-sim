@@ -393,12 +393,11 @@ if __name__ == '__main__':
 
     #--------------------------------------------------------------#
     ###################### Output to Graphs ########################
-    fig = plt.figure(figsize=(18,8))
-    fig.tight_layout()
 
-    cols = 4
+    cols = 2
     rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('torque',my_utils.xyz_axes), \
             ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
+    fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
     
     if satellite.wheels_control_enable:
         rows.append(('wheel_speed', ['0','1','2']))
@@ -406,19 +405,22 @@ if __name__ == '__main__':
     if controller.type == "adaptive":
         rows.append(('control_adaptive_model_output',['none']))
         rows.append(('control_theta',my_utils.xyz_axes))
+    ax_as_np_array= np.array(ax)
+    plots_axes = ax_as_np_array.flatten()
 
     for row_idx, row in enumerate(rows):
         row_name, axes = row
-        pos = cols*row_idx+1
-        for col_idx,axis in enumerate(axes):
-            plt.subplot(len(rows),cols,pos+col_idx)
+        current_plot = plots_axes[row_idx-1]
+        for axis in axes:
             if axis != 'none': 
                 name = row_name + "_" + axis
             else: 
                 name = row_name
-            plt.plot(results_data['time'], results_data[name])
-            plt.xlabel('time (s)')
-            plt.ylabel(f' {name}')
+            current_plot.plot(results_data['time'], results_data[name], label=axis)
+
+        current_plot.set_xlabel('time (s)')
+        current_plot.set_ylabel(f'{row_name}')
+        current_plot.legend()
         
         # else:
 
@@ -444,7 +446,7 @@ if __name__ == '__main__':
         #         plt.xlabel('time (s)')
         #         plt.ylabel(f'{title} angular rate (rad/s)')
 
-    plt.subplots_adjust(wspace=1, hspace=0.5)
+    plt.subplots_adjust(wspace=0.5, hspace=0.5)
     
     # Make plot full screen
     mng = plt.get_current_fig_manager()
