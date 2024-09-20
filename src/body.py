@@ -260,13 +260,13 @@ class WheelModule():
     angular_velocity = np.zeros(3)
     wheels = None
     config = ""
-    def __init__(self, mass, radius, height, config="standard", max_speed=0, max_torque=0):
+    def __init__(self, mass, radius, height, config="ortho", max_speed=0, max_torque=0):
         self.wheels = [Wheel(mass, radius, height) for wheel in range(3)]
         for i, wheel in enumerate(self.wheels):
             wheel.max_speed = max_speed
             wheel.max_torque = max_torque
             my_globals.results_data['wheel_speed_' + str(i)] = []
-        if config == "standard":
+        if config == "ortho":
             self.wheels[0].calc_M_inertia()
             self.wheels[1].calc_M_inertia()
             self.wheels[2].calc_M_inertia()

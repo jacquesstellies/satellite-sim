@@ -10,7 +10,7 @@ type="standard"
 adaptive_gain = 0.1
 
 [wheels]
-config = "standard"
+config = "ortho" # options = [ortho, pyramid, tetrahedron]
 mass = 0.31
 radius = 0.066
 height = 0.025
