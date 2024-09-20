@@ -318,7 +318,7 @@ class Orbit():
         if altitude > 100000:
             self.altitude = altitude
         else:
-            raise(Exception("invalid altitude given"))
+            raise(Exception("invalid altitude given: altitude must be greater than 100km"))
         print(f"altitude {altitude}m")
         # place into circular sun synchronous orbit
         RAAN_rate = 2*np.pi/(365.26*24*3600)
