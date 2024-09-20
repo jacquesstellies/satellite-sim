@@ -317,9 +317,9 @@ if __name__ == '__main__':
 
     #-------------------------------------------------------------#
     ###################### Simulate System ########################
-
-    # Integrate satellite dynamics over time
-    sol = solve_ivp(fun=satellite.calc_state_rates, t_span=[0, sim_time], y0=initial_values, method="RK45",
+    if config['simulation']['enable']:
+        # Integrate satellite dynamics over time
+        sol = solve_ivp(fun=satellite.calc_state_rates, t_span=[0, sim_time], y0=initial_values, method="RK45",
                     t_eval=sim_time_series,
                     max_step=0.1)
     
