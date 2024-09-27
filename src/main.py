@@ -16,6 +16,7 @@ import body
 import my_globals
 import csv
 import os
+import json
 # all units are in SI (m, s, N, kg.. etc)
 
 results_data = my_globals.results_data
@@ -41,13 +42,20 @@ class Satellite(body.Body):
 
     faces : list[Face] = []
     _disturbances : body.Disturbances = None
+
+    config = None
     def __init__(self, dimensions, mass, _wheel_module : body.WheelModule, controller : body.Controller, 
-                 fault : body.Fault, wheel_offset = 0, logger = None, mode = "direction"):
+                 fault : body.Fault, wheel_offset = 0, logger = None, mode = "direction", config=None):
         self._wheel_module = wheel_module
         if _wheel_module.config == "standard":
             self._wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
             self._wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
             self._wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
+        # if _wheel_module.config == "pyramid":
+        #     self._wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
+        #     self._wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
+        #     self._wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
+        #     self._wheel_module.wheels[3].position[0] = self.dimensions['x']-wheel_offset
         self._controller = controller
         self._next_control_time_step = controller.time_step
         self.logger = logger
@@ -56,6 +64,14 @@ class Satellite(body.Body):
             raise Exception(f"mode {mode} not available")
         self.mode = mode
         self.dimensions, self.mass = dimensions, mass
+        self.config = config
+        if self.config['satellite']['inertia_override']:
+            print("M_inertia config = ", config['satellite']['M_Inertia'])
+            self.M_inertia = np.diag(config['satellite']['M_Inertia'])
+            print(self.M_inertia)
+            self.calc_M_inertia_inv()
+        else:
+            self.calc_M_inertia()
         self._disturbances = body.Disturbances()
         self.calc_face_properties()
 
@@ -95,7 +111,7 @@ class Satellite(body.Body):
         return M_inertia
 
     def calc_M_inertia(self):
-        self.M_inertia = self.calc_M_inertia_body() + self.calc_M_inertia_peri()
+        self.M_inertia = self.calc_M_inertia_body() #+ self.calc_M_inertia_peri()
 
         self.calc_M_inertia_inv()
 
@@ -116,7 +132,7 @@ class Satellite(body.Body):
         
             if t > self._next_control_time_step:
                 if self.mode == "direction":
-                    self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, t)
+                    self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, self, t)
                 elif self.mode == "torque":
                     self.T_controller_com = self.ref_T
                 self._next_control_time_step += self._controller.time_step
@@ -167,6 +183,11 @@ def output_dict_to_csv(path, file_name, data):
 
     with open(fr'{path}\{file_name}.csv', 'w+') as file:
         df.to_csv(file,sep=',')
+
+def output_toml_to_file(path, file_name, data):
+
+    with open(fr'{path}\{file_name}.json', 'w+') as file:
+        file.write(json.dumps(data))
 
 def log_to_file(path, file_name, string, print_c=True):
     if print_c:
@@ -228,26 +249,42 @@ def calc_control_data(axes_commanded):
             
     return control_info, accuracy, settling_time
 
-if __name__ == '__main__':
-    
-    # Handle file parsing
+def parse_args():
     parser = argparse.ArgumentParser(prog="rigid_body_simulation")
     parser.add_argument("-l", "--log_output", help="filename to log ouptut", type=str)
-    parser.add_argument("-t", "--testing", help="removes date from log file names", action='store_true')
+    parser.add_argument("-t", "--append_date", help="removes date from log file names", action='store_true')
     args = vars(parser.parse_args())
-    log_file_name = args["log_output"]
-    testing = args["testing"]
-
-    if not testing and log_file_name is not None:
-        dt_string = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
-        log_file_name += f"_{dt_string}"
-
-    path = fr'..\data_logs\{log_file_name}'
-    if not os.path.exists(path) and log_file_name != None:
-        os.mkdir(path)
 
     with open('config.toml', 'r') as config_file:
         config = toml.load(config_file)
+    
+    append_date = args["append_date"]
+    if append_date is None:
+        append_date = config['output']['append_date']
+    
+    if args["log_output"] is None:
+        if config['output']['log_enable'] is False:
+            LOG_FILE_NAME = None
+        else:
+            overide = config['output']['log_file_name_overide']
+            if overide == "None" or overide == "":
+                LOG_FILE_NAME = config['controller']['type'] + '_' + config['wheels']['config']
+    else:
+        LOG_FILE_NAME = args["log_output"]
+
+
+    if append_date is True and LOG_FILE_NAME is not None:
+        dt_string = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+        LOG_FILE_NAME += f"_{dt_string}"
+
+    LOG_FOLDER_PATH = fr'..\data_logs\{LOG_FILE_NAME}'
+    if not os.path.exists(LOG_FOLDER_PATH) and LOG_FILE_NAME != None:
+        os.mkdir(LOG_FOLDER_PATH)
+
+    return LOG_FILE_NAME, LOG_FOLDER_PATH, config
+
+if __name__ == '__main__':
+    LOG_FILE_NAME, LOG_FOLDER_PATH, config = parse_args()
 
     results_data["time"] = []
     for axis in my_utils.xyz_axes:
@@ -280,13 +317,11 @@ if __name__ == '__main__':
                                  T_min=config['controller']['T_min'], filter_coef=config['controller']['filter_coef'], 
                                  time_step=config['controller']['time_step'], type=config['controller']['type'],
                                  angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init), 
-                                 adaptive_gain=config['controller']['adaptive_gain'])
+                                 adaptive_gain=config['controller']['adaptive_gain'],config=config)
     controller.fault = fault
 
     satellite = Satellite(config['satellite']['dimensions'], config['satellite']['mass'],
-                          wheel_module, controller, fault, mode=config['satellite']['mode'])
-    
-    satellite.calc_M_inertia()
+                          wheel_module, controller, fault, mode=config['satellite']['mode'],config=config)
 
     # Satellite Initial Conditions
     satellite.dir_init_obc = dir_init
@@ -296,7 +331,12 @@ if __name__ == '__main__':
     satellite._controller.q_prev = my_utils.conv_Rotation_obj_to_numpy_q(satellite.dir_init_obc)
 
     # Control Variables
-    satellite.ref_q = Rotation.from_euler("xyz", config['satellite']['ref_euler_angle'], degrees=True)
+    if config['satellite']['use_ref_euler']:
+        satellite.ref_q = Rotation.from_euler("xyz", config['satellite']['ref_euler'], degrees=True)
+    elif config['satellite']['use_ref_q']:
+        satellite.ref_q = Rotation.from_quat(config['satellite']['ref_q'])
+    else:
+        raise(Exception("no reference angle commanded"))
     satellite.ref_T = np.array(config['satellite']['ref_T'])
     satellite.wheels_control_enable = config['satellite']['wheels_control_enable']
 
@@ -327,134 +367,137 @@ if __name__ == '__main__':
     ###################### Process Data ########################
     
     # Put results into data object
-    for key, value in results_data.items():
-        if key == 'time':
-            continue
-        if len(value) > int(sim_time/sim_output_resolution_time):
-            if key[:7] == "control":
-                results_data[key] = interpolate_data(value, results_data['control_time'], sim_time_series)[:]
-            else:
-                results_data[key] = interpolate_data(value, results_data['time'], sim_time_series)[:]
-    
-    results_data['time'] = sim_time_series
+        for key, value in results_data.items():
+            if key == 'time':
+                continue
+            if len(value) > int(sim_time/sim_output_resolution_time):
+                if key[:7] == "control":
+                    results_data[key] = interpolate_data(value, results_data['control_time'], sim_time_series)[:]
+                else:
+                    results_data[key] = interpolate_data(value, results_data['time'], sim_time_series)[:]
+        
+        results_data['time'] = sim_time_series
 
-    for i,axis in enumerate(my_utils.xyz_axes):
-        results_data[f'angular_rate_{axis}'] = sol.y[i]
-
-    for i,axis in enumerate(my_utils.q_axes):
-        results_data[f'quaternion_{axis}'] = sol.y[i+3]
-    
-    results_data['euler_int'] = []
-    
-    for row in range(len(results_data['time'])):
-        r : Rotation = Rotation.from_quat([results_data['quaternion_x'][row],
-                                          results_data['quaternion_y'][row],
-                                          results_data['quaternion_z'][row],
-                                          results_data['quaternion_w'][row]])
-        alpha = my_utils.conv_Rotation_obj_to_euler_int(r)
-        results_data['euler_int'].append(alpha)
-
-    if config['output']['energy_enable']:
-        control_energy_arr = sol.y[7:]
-        control_energy_per_axis = {}
-        control_energy_total = 0
         for i,axis in enumerate(my_utils.xyz_axes):
-            control_energy_per_axis[axis] = np.sum(np.abs(control_energy_arr[i]))
-            control_energy_total += control_energy_per_axis[axis]
-            results_data[f'control_energy_{axis}'] = control_energy_arr[i]
-        control_energy_log_output = f"control energy (J): {my_utils.round_dict_values(control_energy_per_axis,3)} | total: {round(control_energy_total,3)}"
-        print(control_energy_log_output)
-    
+            results_data[f'angular_rate_{axis}'] = sol.y[i]
 
-    if config['output']['accuracy_enable']:
-        control_info = control.step_info(sysdata=results_data[f"euler_int"], T=results_data['time'])
-        euler_int_ref = my_utils.conv_Rotation_obj_to_euler_int(satellite.ref_q)
-        accuracy = 1-np.abs((control_info['SteadyStateValue']-euler_int_ref)/euler_int_ref)
-        settling_time = control_info['SettlingTime']
-
-        accuracy_percent = accuracy*100
+        for i,axis in enumerate(my_utils.q_axes):
+            results_data[f'quaternion_{axis}'] = sol.y[i+3]
         
-        final_q = [results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
-        print(f"accuracy %: {accuracy_percent}")
-        print(f"settling_time (s): {round(settling_time,3)}")
-        print(f"accuracy %: {accuracy_percent}")
-
-    if log_file_name != None:
-        output_dict_to_csv(path, log_file_name + "_log", results_data)
-        output_dict_to_csv(path, log_file_name + "_config", config)
-        log_to_file(path, log_file_name, f"accuracy %: {accuracy_percent}", False)
-        log_to_file(path, log_file_name, f"settling_time (s): {round(settling_time,3)}",    False)
-        log_to_file(path, log_file_name, f"accuracy %: {accuracy_percent}", False)
-        log_to_file(path, log_file_name, control_energy_log_output, False)
+        results_data['euler_int'] = []
         
+        for row in range(len(results_data['time'])):
+            r : Rotation = Rotation.from_quat([results_data['quaternion_x'][row],
+                                            results_data['quaternion_y'][row],
+                                            results_data['quaternion_z'][row],
+                                            results_data['quaternion_w'][row]])
+            alpha = my_utils.conv_Rotation_obj_to_euler_int(r)
+            results_data['euler_int'].append(alpha)
 
-    # yaw_pitch_roll_output = False
-    # if( not yaw_pitch_roll_output):
-
-    #--------------------------------------------------------------#
-    ###################### Output to Graphs ########################
-
-    cols = 2
-    rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('torque',my_utils.xyz_axes), \
-            ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
-    fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
-    
-    if satellite.wheels_control_enable:
-        rows.append(('wheel_speed', ['0','1','2']))
-
-    if controller.type == "adaptive":
-        rows.append(('control_adaptive_model_output',['none']))
-        rows.append(('control_theta',my_utils.xyz_axes))
-    ax_as_np_array= np.array(ax)
-    plots_axes = ax_as_np_array.flatten()
-
-    for row_idx, row in enumerate(rows):
-        row_name, axes = row
-        current_plot = plots_axes[row_idx-1]
-        for axis in axes:
-            if axis != 'none': 
-                name = row_name + "_" + axis
-            else: 
-                name = row_name
-            current_plot.plot(results_data['time'], results_data[name], label=axis)
-
-        current_plot.set_xlabel('time (s)')
-        current_plot.set_ylabel(f'{row_name}')
-        current_plot.legend()
+        if config['output']['energy_enable']:
+            control_energy_arr = sol.y[7:]
+            control_energy_per_axis = {}
+            control_energy_total = 0
+            for i,axis in enumerate(my_utils.xyz_axes):
+                control_energy_per_axis[axis] = np.sum(np.abs(control_energy_arr[i]))
+                control_energy_total += control_energy_per_axis[axis]
+                results_data[f'control_energy_{axis}'] = control_energy_arr[i]
+            control_energy_log_output = f"control energy (J): {my_utils.round_dict_values(control_energy_per_axis,3)} | total: {round(control_energy_total,3)}"
+            print(control_energy_log_output)
         
-        # else:
+        accuracy_percent = None
+        settling_time = None
+        if config['output']['accuracy_enable']:
+            control_info = control.step_info(sysdata=results_data[f"euler_int"], T=results_data['time'])
+            euler_int_ref = my_utils.conv_Rotation_obj_to_euler_int(satellite.ref_q)
+            accuracy = 1-np.abs((control_info['SteadyStateValue']-euler_int_ref)/euler_int_ref)
+            settling_time = control_info['SettlingTime']
 
-        #     # Convert data to yaw pitch and roll
-        #     y_transpose = [list(x) for x in zip(*sol.y)] # transpose columns and rows
-        #     yaw_pitch_roll_values = list(map(calc_yaw_pitch_roll_rates,y_transpose))
-        #     yaw_pitch_roll_values = [list(x) for x in zip(*yaw_pitch_roll_values)]
+            accuracy_percent = accuracy*100
+            
+            final_q = [results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
+            print(f"accuracy %: {accuracy_percent}")
+            print(f"settling_time (s): {round(settling_time,3)}")
 
-        #     for i in range(cols):
-        #         if(i==0):
-        #             title = 'yaw'
-        #         elif(i==1):
-        #             title = 'pitch'
-        #         elif(i==2):
-        #             title = 'roll'
-        #         plt.subplot(rows,cols,i+1)
-        #         plt.plot(sol.t, yaw_pitch_roll_values[i])
-        #         plt.xlabel('time (s)')
-        #         plt.ylabel(f'{title} angle (rad)')
+        if LOG_FILE_NAME != None:
+            LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
+            output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", results_data)
+            output_toml_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME + "_config", config)
+            if accuracy_percent is not None:
+                log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"accuracy %: {accuracy_percent}", False)
+            if settling_time is not None:
+                log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"settling_time (s): {round(settling_time,3)}",    False)
+            log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"accuracy %: {accuracy_percent}", False)
+            log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, control_energy_log_output, False)
+            
 
-        #         plt.subplot(rows,cols,i+4)
-        #         plt.plot(sol.t, yaw_pitch_roll_values[i+3]) 
-        #         plt.xlabel('time (s)')
-        #         plt.ylabel(f'{title} angular rate (rad/s)')
+        # yaw_pitch_roll_output = False
+        # if( not yaw_pitch_roll_output):
 
-    plt.subplots_adjust(wspace=0.5, hspace=0.5)
-    
-    # Make plot full screen
-    mng = plt.get_current_fig_manager()
-    mng.window.state('zoomed')
+        #--------------------------------------------------------------#
+        ###################### Output to Graphs ########################
 
-    plt.show()
+        cols = 2
+        rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('torque',my_utils.xyz_axes), \
+                ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
+        fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
+        
+        if satellite.wheels_control_enable:
+            rows.append(('wheel_speed', ['0','1','2']))
 
-    if log_file_name != None:
-        fig.savefig(fr"..\data_logs\{log_file_name}\{log_file_name}.pdf", bbox_inches='tight')
+        if controller.type == "adaptive":
+            rows.append(('control_adaptive_model_output',['none']))
+            rows.append(('control_theta',my_utils.xyz_axes))
+        ax_as_np_array= np.array(ax)
+        plots_axes = ax_as_np_array.flatten()
+
+        for row_idx, row in enumerate(rows):
+            row_name, axes = row
+            current_plot = plots_axes[row_idx-1]
+            for axis in axes:
+                if axis != 'none': 
+                    name = row_name + "_" + axis
+                else: 
+                    name = row_name
+                current_plot.plot(results_data['time'], results_data[name], label=axis)
+
+            current_plot.set_xlabel('time (s)')
+            current_plot.set_ylabel(f'{row_name}')
+            current_plot.legend()
+            
+            # else:
+
+            #     # Convert data to yaw pitch and roll
+            #     y_transpose = [list(x) for x in zip(*sol.y)] # transpose columns and rows
+            #     yaw_pitch_roll_values = list(map(calc_yaw_pitch_roll_rates,y_transpose))
+            #     yaw_pitch_roll_values = [list(x) for x in zip(*yaw_pitch_roll_values)]
+
+            #     for i in range(cols):
+            #         if(i==0):
+            #             title = 'yaw'
+            #         elif(i==1):
+            #             title = 'pitch'
+            #         elif(i==2):
+            #             title = 'roll'
+            #         plt.subplot(rows,cols,i+1)
+            #         plt.plot(sol.t, yaw_pitch_roll_values[i])
+            #         plt.xlabel('time (s)')
+            #         plt.ylabel(f'{title} angle (rad)')
+
+            #         plt.subplot(rows,cols,i+4)
+            #         plt.plot(sol.t, yaw_pitch_roll_values[i+3]) 
+            #         plt.xlabel('time (s)')
+            #         plt.ylabel(f'{title} angular rate (rad/s)')
+
+        plt.subplots_adjust(wspace=0.5, hspace=0.5)
+        
+        # Make plot full screen
+        # mng = plt.get_current_fig_manager()
+        # mng.window.state('zoomed')
+
+        plt.show()
+
+        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
+            fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}.pdf", bbox_inches='tight')
 
 

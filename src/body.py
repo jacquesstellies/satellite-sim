@@ -115,13 +115,14 @@ class Controller:
     k=1
     c=1
     fault : Fault = None
-    type="standard"
-    types = ["standard", "adaptive"]
+    type="q_feedback"
+    types = ["q_feedback", "backstepping", "adaptive"]
     adaptive_gain = 0
+    config = None
 
     def __init__(self, enable, k, c, fault=None, T_max = None, T_min = 0, 
-                 filter_coef = 0.5, time_step=0.1, type="standard", adaptive_model_coeff=[0,0,0],
-                 angular_v_init=None, quaternion_init=None, adaptive_gain=0):
+                 filter_coef = 0.5, time_step=0.1, type="q_feedback", adaptive_model_coeff=[0,0,0],
+                 angular_v_init=None, quaternion_init=None, adaptive_gain=0, config=None):
         self.enable = enable
         self.T_max = T_max
         self.T_min = T_min
@@ -148,12 +149,14 @@ class Controller:
             for i, axis in enumerate(my_utils.xyz_axes):
                 my_globals.results_data[f'control_theta_{axis}'] = []
         print("controller type ", self.type)
-        print("adaptive gain ", self.adaptive_gain)
+        if self.type == "adaptive":
+            print("adaptive gain ", self.adaptive_gain)
         my_globals.results_data['control_time'] = []
+        self.config = config['controller']
 
     T_output_prev = 0
 
-    def calc_closed_loop_control_torque(self, q_curr, angular_v, ref_q):
+    def calc_q_feedback_control_torque(self, q_curr, angular_v, ref_q):
         K = np.diag(np.full(3,self.k))
         C = np.diag(self.c)
         angular_v = np.array(angular_v)
@@ -163,19 +166,66 @@ class Controller:
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
 
         return + K@q_error_vec - C@angular_v
+    
+    sub_types = ["linear", "arctan"]
+    def calc_backstepping_control_torque(self, q_curr: np.quaternion, angular_v, ref_q, satellite):
+        I1 = satellite.M_inertia[0][0]
+        I2 = satellite.M_inertia[1][1]
+        I3 = satellite.M_inertia[2][2]
+        p1 = (I2 - I3)/I1
+        p2 = (I3 - I1)/I2
+        p3 = (I1 - I2)/I3
+        alpha = 0.75
+        beta = 8
+        sub_type = self.config["sub_type"]
+        if sub_type not in self.sub_types:
+            raise Exception(f"sub_type {sub_type} is not a valid sub_type")
+        if self.config["sub_type"] == "linear":
+            s = 1
+            g = 10
+            e = angular_v - s*quaternion.as_vector_part(q_curr)
+            u1 = -1/2*q_curr.x-p1*angular_v[1]*angular_v[2] - s*0.5*(q_curr.w*angular_v[0]+q_curr.y*angular_v[2]-q_curr.z*angular_v[1]) \
+                - g*(e[0])
+            u2 = -1/2*q_curr.y-p2*angular_v[0]*angular_v[2] - s*0.5*(q_curr.w*angular_v[1]+q_curr.z*angular_v[0]-q_curr.x*angular_v[2]) \
+                - g*(e[1])
+            u3 = -1/2*q_curr.z-p3*angular_v[0]*angular_v[1] - s*0.5*(q_curr.w*angular_v[2]+q_curr.x*angular_v[1]-q_curr.y*angular_v[0]) \
+                - g*(e[2])
+        # elif self.config["sub_type"] == "arctan":
+        #     a  = [1, 1, 1]
+        #     b  = [1, 1, 1]
+        #     c  = [1, 1, 1]
+        #     s = 1
+        #     g = 10
 
-    def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion, t) -> np.array:
+        #     phi = alpha*np.arctan(beta*quaternion.as_vector_part(q_curr))
+        #     phi_dot = alpha*beta/(1+np.power(beta*quaternion.as_vector_part(q_curr),2))
+        #     e = angular_v - s*phi
+        #     u1 = -1/2*q_curr.x-p1*angular_v[1]*angular_v[2] - s*0.5*phi_dot*(q_curr.w*angular_v[0]+q_curr.y*angular_v[2]-q_curr.z*angular_v[1]) \
+        #         - g*(e[0])
+        #     u2 = -1/2*q_curr.y-p2*angular_v[0]*angular_v[2] - s*0.5*phi_dot*(q_curr.w*angular_v[1]+q_curr.z*angular_v[0]-q_curr.x*angular_v[2]) \
+        #         - g*(e[1])
+        #     u3 = -1/2*q_curr.z-p3*angular_v[0]*angular_v[1] - s*0.5*phi_dot*(q_curr.w*angular_v[2]+q_curr.x*angular_v[1]-q_curr.y*angular_v[0]) \
+        #         - g*(e[2])
+            
+        u = np.array([u1, u2, u3])
+        return u
+
+    def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion, satellite, t) -> np.array:
 
         my_globals.results_data['control_time'].append(t)
-        T_output = self.calc_closed_loop_control_torque(q_curr, angular_v, ref_q)
+        if self.type == "q_feedback":
+            T_output = self.calc_q_feedback_control_torque(q_curr, angular_v, ref_q)
+            # T_output = self.inject_fault(T_output)
+            if self.type == "adaptive":
+                T_output = self.calc_adaptive_control_torque_output(T_output, q_curr, ref_q)
 
-        T_output = self.limit_torque(T_output)
+        elif self.type == "backstepping":    
+            T_output = self.calc_backstepping_control_torque(q_curr, angular_v, ref_q, satellite)
+
+        # T_output = self.limit_torque(T_output)
         
-        T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
-        T_output = self.inject_fault(T_output)
+        # T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
         
-        if self.type == "adaptive":
-            T_output = self.calc_adaptive_control_torque_output(T_output, q_curr, ref_q)
 
         return T_output
     
@@ -188,7 +238,7 @@ class Controller:
     q_prev : np.quaternion = None
     
     def calc_adaptive_model_output(self, ref_q):
-        T_model = self.calc_closed_loop_control_torque(self.q_prev, self.angular_v_prev, ref_q)
+        T_model = self.calc_q_feedback_control_torque(self.q_prev, self.angular_v_prev, ref_q)
         angular_v_result = self.angular_v_prev + self.M_inertia_inv_model@(T_model)*self.time_step
         self.angular_v_prev = angular_v_result
         inertial_v_q = np.quaternion(0, angular_v_result[0], angular_v_result[1], angular_v_result[2])
@@ -260,6 +310,8 @@ class WheelModule():
     angular_velocity = np.zeros(3)
     wheels = None
     config = ""
+    T_distribution = np.zeros((3,4))
+    T_psuedo_inv = np.zeros((3,3))
     def __init__(self, mass, radius, height, config="ortho", max_speed=0, max_torque=0):
         self.wheels = [Wheel(mass, radius, height) for wheel in range(3)]
         for i, wheel in enumerate(self.wheels):
@@ -271,13 +323,24 @@ class WheelModule():
             self.wheels[1].calc_M_inertia()
             self.wheels[2].calc_M_inertia()
 
+            self.T_distribution = np.eye(3)
             self.wheels[0].dir_vector = np.array([1,0,0])
             self.wheels[1].dir_vector = np.array([0,1,0])
             self.wheels[2].dir_vector = np.array([0,0,1])
+        elif config == "pyramid":
+            self.T_distribution = 0.5774*np.array([[1,-1,-1,1],
+                            [1,1,-1,-1],
+                            [1,1,1,1]])
+        elif config ==  "tetrahedron":
+            self.T_distribution = np.array([[0.9428,-0.4714,-0.4714,0],
+                            [0,0.8165,-0.8165,0],
+                            [-0.3333,-0.3333,-0.3333,1]])    
             # elif len(wheels) == 1:
             #     self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
         else:
-            raise(Exception("error unable to set up wheel configuration"))
+            raise(Exception(f"{config} is not a valid wheel config. \nerror unable to set up wheel configuration"))
+        
+        self.T_psuedo_inv = np.linalg.pinv(self.T_distribution)
 
     def get_angular_momentum(self):
         return self.angular_momentum

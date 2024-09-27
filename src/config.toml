@@ -2,11 +2,12 @@
 enable = true
 c = [3.0,3.0,3.0]
 k = 3
-T_max = 0.020
+T_max = 1000000
 T_min = 0
 filter_coef = 0
-time_step = 0.1
-type="standard"
+time_step = 0.000001
+type="backstepping" # options = [q_feedback, backstepping, adaptive]
+sub_type="linear"
 adaptive_gain = 0.1
 
 [wheels]
@@ -18,7 +19,7 @@ max_speed_rpm = 10000 #rpm
 max_torque = 0.1
 
 [fault]
-type = "torque_limit" # options = [catastrophic comm_delay torque_limit]
+type = "torque_limit" # options = [catastrophic, comm_delay, torque_limit]
 torque_limit = 0.5 # torque limit fraction
 filter_coef = 0.99
 wheel_axis = 'y'
@@ -29,18 +30,23 @@ update_rate = 0.5
 [satellite]
 euler_init_en = false
 euler_init = [0, 0, 0]
-q_init = [0,0,0,1]
+q_init = [0.4646,0.1928,0.8047,0.3153]
 mode = "direction"
 ref_T = [0, 1, 0]
-ref_euler_angle = [0, 0, 45]
-wheels_control_enable = true
+use_ref_euler = false
+ref_euler = [0, 0, 45]
+use_ref_q = true
+ref_q = [0, 0, 0, 1]
+wheels_control_enable = false
 
 dimensions = {'x' = 0.3, 'y' = 0.3, 'z' = 0.3}
 mass = 50
+M_Inertia = [10, 15, 20]
+inertia_override = true
 
 [simulation]
 enable = true
-duration = 100
+duration = 10
 resolution = 0.1
 test_mode_en = false
 test_duration = 3
@@ -49,3 +55,7 @@ test_resolution = 1
 [output]
 accuracy_enable = false
 energy_enable = true
+log_enable = true # all fields below are only valid if log_enable is true
+append_date = true
+pdf_output_enable = true
+log_file_name_overide = "None"
