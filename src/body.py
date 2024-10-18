@@ -11,16 +11,19 @@ class Fault():
     enabled = False
     master_enable = True
     type = "catastrophic"
-    wheel_num = 'x'
+    wheel_num = 0
     torque_limit = 1
     types = ["catastrophic", "comm_delay", "torque_limit"]
     filter_coeff = 0
 
-    def __init__(self, time, wheel_axis, type, torque_limit):
-        self.time = time
-        self.wheel_num = my_utils.xyz_axes.index(wheel_axis)
-        self.type=type
-        self.torque_limit = torque_limit
+    def __init__(self, config):
+        self.time = config['fault']['time']
+        self.wheel_num = config['fault']['wheel_num']
+        self.type=config['fault']['type']
+        self.torque_limit = config['fault']['torque_limit']
+        self.master_enable = config['fault']['master_enable']
+        self.filter_coeff = config['fault']['filter_coef']
+
 
 class Body:
 
@@ -35,23 +38,26 @@ class Body:
 class Wheel(Body):
     dimensions = {'radius': 0, 'height': 0}
     position = np.zeros(3)
-    # angular_v = np.zeros(3)
     speed = 0
-    acceleration = 0
+    T = 0
+    H = 0
     dir_vector = np.zeros(3)
     friction_coef = 0.0001
-    
+    config = None
+    index = 0
 
     fault : Fault = None 
-    min_speed = 0.1
-    max_speed = 10000
-    max_torque = 0.016
-    def __init__(self, mass, radius, height, dir_init_inertial=None):
-        self.mass = mass
-        self.dimensions['radius'] = radius
-        self.dimensions['height'] = height
-        if dir_init_inertial is None:
-            self.dir_init_inertial = Rotation.from_quat([0,0,0,1])
+    max_speed = 0
+    max_torque = 0
+    t_sample = 0
+    def __init__(self, config, fault):
+        self.mass = config['wheels']['mass']
+        self.dimensions['radius'] = config['wheels']['radius']
+        self.dimensions['height'] = config['wheels']['height']
+        self.max_speed = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
+        self.max_torque = config['wheels']['max_torque']
+        self.t_sample = config['controller']['time_step']
+        self.fault = fault
     
     def calc_M_inertia(self):
         # Moment of inertia
@@ -67,28 +73,53 @@ class Wheel(Body):
     #     if np.isnan(angular_momentum[0]):
     #         raise("Nan error")
     #     return self.speed*self.dir_vector
-    
-    def update_angular_velocity(self, angular_v: np.array):
-        if (self.fault is not None and self.fault.enabled) or self.speed >= self.min_speed:
-            self.speed = 0
-            self.angular_v = np.zeros(3)
-        else:
-            self.angular_v = angular_v*self.dir_vector
-            self.speed = my_utils.magnitude(angular_v)
+    flag = False
+    flag_2 = False
+    def calc_state_rates(self, new_speed):
+        speed_prev = self.speed
 
-
-    def update_speed(self, speed):
-        if np.abs(speed) > self.max_speed:
-            self.speed = self.max_speed*np.sign(speed)
+        if np.abs(new_speed) > self.max_speed:
+            self.speed = self.max_speed*np.sign(new_speed)
+            if not self.flag:
+                print(f"speed limit reached {self.speed} {self.index}")
+                self.flag = True
         else:
-            self.speed = speed
-        # self.speed = speed
+            self.speed = new_speed
+
+        self.T = self.M_inertia[2][2]*((self.speed - speed_prev)/self.t_sample)
+        wheel_torque_limit = self.max_torque
+
         
-    def update_acceleration(self, acceleration):
-        if self.speed < self.max_speed:
-            self.acceleration = acceleration
-        else:
-            self.acceleration = 0 
+        if self.fault.master_enable and self.index == self.fault.wheel_num:
+            if self.flag == False:
+                print("catastrophic fault")
+                self.flag = True
+            if self.fault.type == "torque_limit":
+                self.T = self.fault.torque_limit*self.max_torque
+            elif self.fault.type == "catastrophic":
+                self.T = 0
+                self.speed = 0
+                self.H = 0
+                return 0, 0, 0
+        
+
+        if np.abs(self.T) > wheel_torque_limit:
+            # if not self.flag:
+            #     print("torque limit reached")
+            #     self.flag = True
+            sign = np.sign(self.T)
+            self.speed = (((sign)*(self.max_torque)*self.t_sample)/self.M_inertia[2][2])+speed_prev
+            if np.abs(new_speed) > self.max_speed:
+                self.speed = self.max_speed*np.sign(new_speed)
+
+        self.speed = my_utils.low_pass_filter(self.speed, speed_prev, 0.8)
+
+        # if not self.flag:
+            
+        #     print(f"wheel {self.index} speed {self.speed} torque {self.T}")
+        self.H = self.M_inertia[2][2]*self.speed
+        return self.speed, self.T, self.H
+        
         
 
 class Integrator:
@@ -120,31 +151,31 @@ class Controller:
     adaptive_gain = 0
     config = None
 
-    def __init__(self, enable, k, c, fault=None, T_max = None, T_min = 0, 
-                 filter_coef = 0.5, time_step=0.1, type="q_feedback", adaptive_model_coeff=[0,0,0],
-                 angular_v_init=None, quaternion_init=None, adaptive_gain=0, config=None):
-        self.enable = enable
-        self.T_max = T_max
-        self.T_min = T_min
+    def __init__(self, fault=None,
+                 angular_v_init=None, quaternion_init=None, config=None):
+        self.enable = config['controller']['enable']
+        self.T_max = config['controller']['T_max']
+        self.T_min = config['controller']['T_min']
+        filter_coef = config['controller']['filter_coef']
         if filter_coef <= 1 or filter_coef >= 0:
             self.filter_coef = filter_coef
         else:
             raise Exception("filter coef must be between 0 and 1")
-        self.time_step = time_step
-        self.k = k
-        if len(c) != 3:
+        self.time_step = config['controller']['time_step']
+        self.k = config['controller']['k']
+        self.c = config['controller']['c']
+        if len(self.c) != 3:
             raise("error c must be a list of length 3")
-        self.c = c
         self.fault = fault
-        self.type = type
-        if type not in self.types:
+        self.type = config['controller']['type']
+        if self.type not in self.types:
             raise Exception(f"controller type {type} type is not a valid type")
-        if type == "adaptive":
+        if self.type == "adaptive":
             if angular_v_init is None or quaternion_init is None:
                 raise Exception("initialization of angular velocity and quaternion is required for adaptive model")
             self.angular_v_prev = angular_v_init
             self.quaternion_prev = quaternion_init
-            self.adaptive_gain = adaptive_gain
+            self.adaptive_gain = config['controller']['adaptive_gain']
             my_globals.results_data['control_adaptive_model_output'] = []
             for i, axis in enumerate(my_utils.xyz_axes):
                 my_globals.results_data[f'control_theta_{axis}'] = []
@@ -152,11 +183,12 @@ class Controller:
         if self.type == "adaptive":
             print("adaptive gain ", self.adaptive_gain)
         my_globals.results_data['control_time'] = []
+        my_globals.results_data['control_time'].append(0)
         self.config = config['controller']
 
     T_output_prev = 0
 
-    def calc_q_feedback_control_torque(self, q_curr, angular_v, ref_q):
+    def calc_q_feedback_control_torque(self, q_curr, angular_v, ref_q, M_inertia, wheels_H):
         K = np.diag(np.full(3,self.k))
         C = np.diag(self.c)
         angular_v = np.array(angular_v)
@@ -164,8 +196,9 @@ class Controller:
         q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(ref_q) # ref_q is already normalized
 
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
+        Hnet = M_inertia@(angular_v) + wheels_H
 
-        return + K@q_error_vec - C@angular_v
+        return + K@q_error_vec - C@angular_v + np.cross(angular_v, Hnet)
     
     sub_types = ["linear", "arctan"]
     def calc_backstepping_control_torque(self, q_curr: np.quaternion, angular_v, ref_q, satellite):
@@ -210,11 +243,11 @@ class Controller:
         u = np.array([u1, u2, u3])
         return u
 
-    def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion, satellite, t) -> np.array:
+    def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion, satellite, wheels_H, t) -> np.array:
 
         my_globals.results_data['control_time'].append(t)
         if self.type == "q_feedback":
-            T_output = self.calc_q_feedback_control_torque(q_curr, angular_v, ref_q)
+            T_output = self.calc_q_feedback_control_torque(q_curr, angular_v, ref_q, satellite.M_inertia, wheels_H)
             # T_output = self.inject_fault(T_output)
             if self.type == "adaptive":
                 T_output = self.calc_adaptive_control_torque_output(T_output, q_curr, ref_q)
@@ -222,9 +255,9 @@ class Controller:
         elif self.type == "backstepping":    
             T_output = self.calc_backstepping_control_torque(q_curr, angular_v, ref_q, satellite)
 
-        # T_output = self.limit_torque(T_output)
+        T_output = self.limit_torque(T_output)
         
-        # T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
+        T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
         
 
         return T_output
@@ -249,7 +282,7 @@ class Controller:
     theta_prev = 0
     def calc_adaptive_control_torque_output(self, T_com, q_meas : np.quaternion, q_ref : np.quaternion):
         q_model = self.calc_adaptive_model_output(q_ref)
-        my_globals.results_data['control_adaptive_model_output'].append(my_utils.conv_Rotation_obj_to_euler_int(my_utils.conv_numpy_to_Rotation_obj_q(q_model)))
+        my_globals.results_data['control_adaptive_model_output'].append(my_utils.conv_Rotation_obj_to_alpha(my_utils.conv_numpy_to_Rotation_obj_q(q_model)))
         q_error = q_meas.inverse()*q_model
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
         q_model_vec = np.array([q_model.x, q_model.y, q_model.z])
@@ -261,8 +294,10 @@ class Controller:
         return T_com + T_com*theta
 
     def limit_torque(self, M):
+        # print(self.T_max)
         for i in range(3):
             if (self.T_max is not None) and (np.abs(M[i]) >= self.T_max):
+                # print('limiting torque')
                 M[i] = np.sign(M[i])*self.T_max
             if np.abs(M[i]) < self.T_min:
                 M[i] = 0
@@ -306,41 +341,46 @@ class Controller:
 
 
 class WheelModule():
-    angular_momentum = np.zeros(3)
-    angular_velocity = np.zeros(3)
+    H = np.zeros(3)
     wheels = None
-    config = ""
-    T_distribution = np.zeros((3,4))
-    T_psuedo_inv = np.zeros((3,3))
-    def __init__(self, mass, radius, height, config="ortho", max_speed=0, max_torque=0):
-        self.wheels = [Wheel(mass, radius, height) for wheel in range(3)]
-        for i, wheel in enumerate(self.wheels):
-            wheel.max_speed = max_speed
-            wheel.max_torque = max_torque
-            my_globals.results_data['wheel_speed_' + str(i)] = []
-        if config == "ortho":
-            self.wheels[0].calc_M_inertia()
-            self.wheels[1].calc_M_inertia()
-            self.wheels[2].calc_M_inertia()
+    layout = None
+    config = None
+    D = None
+    D_psuedo_inv = None
+    num_wheels = 0
+    def __init__(self, config,fault=None):
 
-            self.T_distribution = np.eye(3)
-            self.wheels[0].dir_vector = np.array([1,0,0])
-            self.wheels[1].dir_vector = np.array([0,1,0])
-            self.wheels[2].dir_vector = np.array([0,0,1])
-        elif config == "pyramid":
-            self.T_distribution = 0.5774*np.array([[1,-1,-1,1],
+        self.layout = config['wheels']['config']
+        self.config = config
+        if self.layout == "ortho":
+            self.num_wheels = 3
+            self.D = np.eye(3)
+        elif self.layout == "pyramid":
+            self.num_wheels = 4
+            self.D = 0.5774*np.array([[1,-1,-1,1],
                             [1,1,-1,-1],
                             [1,1,1,1]])
-        elif config ==  "tetrahedron":
-            self.T_distribution = np.array([[0.9428,-0.4714,-0.4714,0],
+
+        elif self.layout ==  "tetrahedron":
+            self.num_wheels = 4
+            self.D = np.array([[0.9428,-0.4714,-0.4714,0],
                             [0,0.8165,-0.8165,0],
-                            [-0.3333,-0.3333,-0.3333,1]])    
+                            [-0.3333,-0.3333,-0.3333,1]]) 
             # elif len(wheels) == 1:
             #     self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
         else:
-            raise(Exception(f"{config} is not a valid wheel config. \nerror unable to set up wheel configuration"))
+            raise(Exception(f"{self.layout} is not a valid wheel layout. \nerror unable to set up wheel layout"))
         
-        self.T_psuedo_inv = np.linalg.pinv(self.T_distribution)
+        self.wheels = [Wheel(config,fault) for wheel in range(self.num_wheels)]
+        for i, wheel in enumerate(self.wheels):
+            wheel.max_speed = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
+            wheel.max_torque = config['wheels']['max_torque']
+            my_globals.results_data['wheel_speed_' + str(i)] = []
+            wheel.dir_vector = np.transpose(self.D)[i]
+            wheel.calc_M_inertia()
+            wheel.index = i
+
+        self.D_psuedo_inv = np.linalg.pinv(self.D)
 
     def get_angular_momentum(self):
         return self.angular_momentum
@@ -349,25 +389,30 @@ class WheelModule():
         return (coeff)*value_prev + (1 - coeff)*value
     
     H_dot_prev = np.zeros(3)
-    def calc_state_rates(self, T_com : np.array, sampling_time):
-        H_input = np.zeros(3)
-        dH = np.zeros(3)
+    def calc_state_rates(self, u_c : np.array, sampling_time):
+        H_vec_init = np.zeros(3)
+        H_vec_result = np.zeros(3)
         H_dot = np.zeros(3)
+        T_c = self.D_psuedo_inv@u_c
 
         for wheel in self.wheels:
-            H_input = H_input + wheel.speed*wheel.M_inertia[2][2]*wheel.dir_vector
-            
-        dH = sampling_time*(T_com)
-        H_result = dH + H_input
-        H_dot = self.low_pass_filter(T_com, self.H_dot_prev, 0.5)
+            H_vec_init = H_vec_init + wheel.H*wheel.dir_vector
+            dH = T_c[wheel.index]*sampling_time
+            # print('dH ', dH)
+            speed, H, T = wheel.calc_state_rates((wheel.H+dH)/wheel.M_inertia[2][2])
+            # print('wheel speed ', wheel.speed)
+            # wheel.H = wheel.speed*wheel.M_inertia[2][2]
+            # print('wheel H ', wheel.H)
+            H_vec_result = H_vec_result + wheel.H*wheel.dir_vector
+            # print('H_vec_result ', H_vec_result)
+            # print('')
+        
+        H_dot = (H_vec_result - H_vec_init)/sampling_time
+        self.H = H_vec_result
+        # print("H_dot = ",H_dot)
 
-        for wheel in self.wheels:
-            wheel.update_speed((H_result@wheel.dir_vector)/wheel.M_inertia[2][2])
-            # acc = ((T_com@wheel.dir_vector)-wheel.friction_coef*wheel.speed)/wheel.M_inertia[2][2]
-            # wheel.update_acceleration(acc)
-            # H_dot = H_dot + wheel.acceleration*wheel.M_inertia[2][2]*wheel.dir_vector
         # @TODO make torque zero when acc is zero
-        return H_dot, H_result
+        return H_dot, H_vec_result
 
 class Orbit():
     altitude = 0

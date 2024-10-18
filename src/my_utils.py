@@ -44,7 +44,8 @@ def conv_Rotation_obj_to_dict(r : Rotation):
         my_dict[axis] = q_result[i]
     return my_dict
 
-def conv_Rotation_obj_to_euler_int(r : Rotation):
+# convert a Rotation object to angle about euler axis of rotation
+def conv_Rotation_obj_to_alpha(r : Rotation):
     alpha = np.arccos(0.5*(np.trace(r.as_matrix())-1))
     return alpha
 
@@ -56,3 +57,6 @@ def conv_rpm_to_rads_per_sec(value):
 
 def conv_rads_per_sec_to_rpm(value):
     return value*30/np.pi
+
+def low_pass_filter(value, value_prev, coeff):
+    return (coeff)*value_prev + (1 - coeff)*value

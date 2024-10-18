@@ -22,7 +22,7 @@ max_torque = 0.1
 type = "torque_limit" # options = [catastrophic, comm_delay, torque_limit]
 torque_limit = 0.5 # torque limit fraction
 filter_coef = 0.99
-wheel_axis = 'y'
+wheel_num = 1
 time = 0
 master_enable = false
 update_rate = 0.5

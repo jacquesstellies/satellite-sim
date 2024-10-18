@@ -28,7 +28,7 @@ class Face():
     
 class Satellite(body.Body):
 
-    logger = None
+    _logger = None
     wheel_offset = 0 # offset of wheel center of mass from edge of device
 
     _controller : body.Controller = None
@@ -44,11 +44,12 @@ class Satellite(body.Body):
     _disturbances : body.Disturbances = None
 
     config = None
-    def __init__(self, dimensions, mass, _wheel_module : body.WheelModule, controller : body.Controller, 
-                 fault : body.Fault, wheel_offset = 0, logger = None, mode = "direction", config=None):
+    def __init__(self, _wheel_module : body.WheelModule, controller : body.Controller, 
+                 fault : body.Fault, wheel_offset = 0, logger = None, config=None):
+        self.config = config
         self._wheel_module = wheel_module
         if _wheel_module.config == "standard":
-            self._wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
+            self._wheel_module.wheels[0].position[0] = self.dimensions['x']-config
             self._wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
             self._wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
         # if _wheel_module.config == "pyramid":
@@ -58,17 +59,17 @@ class Satellite(body.Body):
         #     self._wheel_module.wheels[3].position[0] = self.dimensions['x']-wheel_offset
         self._controller = controller
         self._next_control_time_step = controller.time_step
-        self.logger = logger
+        self._logger = logger
         self._fault = fault
-        if mode not in self.modes:
-            raise Exception(f"mode {mode} not available")
-        self.mode = mode
-        self.dimensions, self.mass = dimensions, mass
-        self.config = config
+        self.mode = config['satellite']['mode']
+        if self.mode not in self.modes:
+            raise Exception(f"mode {self.mode} not available")
+        
+        self.dimensions, self.mass = config['satellite']['dimensions'], config['satellite']['mass']
+
         if self.config['satellite']['inertia_override']:
-            print("M_inertia config = ", config['satellite']['M_Inertia'])
             self.M_inertia = np.diag(config['satellite']['M_Inertia'])
-            print(self.M_inertia)
+            print("Satellite inertia ",self.M_inertia)
             self.calc_M_inertia_inv()
         else:
             self.calc_M_inertia()
@@ -132,7 +133,7 @@ class Satellite(body.Body):
         
             if t > self._next_control_time_step:
                 if self.mode == "direction":
-                    self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, self, t)
+                    self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, self, self._wheel_module.H, t)
                 elif self.mode == "torque":
                     self.T_controller_com = self.ref_T
                 self._next_control_time_step += self._controller.time_step
@@ -148,7 +149,7 @@ class Satellite(body.Body):
         
         T_aero = self._disturbances.calc_aero_torque(satellite, q_input)
         T_grav = self._disturbances.calc_grav_torque(satellite, q_input)
-        T_dist = T_aero + T_grav
+        T_dist = (T_aero + T_grav)*1e10 
 
         Hnet = self.M_inertia@(sat_angular_v_input) + self.wheels_H_result
         sat_angular_acc_result = self.M_inertia_inv@(T_controller + T_dist - np.cross(sat_angular_v_input,Hnet))
@@ -252,7 +253,8 @@ def calc_control_data(axes_commanded):
 def parse_args():
     parser = argparse.ArgumentParser(prog="rigid_body_simulation")
     parser.add_argument("-l", "--log_output", help="filename to log ouptut", type=str)
-    parser.add_argument("-t", "--append_date", help="removes date from log file names", action='store_true')
+    parser.add_argument("-d", "--append_date", help="adds date to log file names", action='store_true')
+    parser.add_argument("-a", "--append", help="appends text to ", action='store_true')
     args = vars(parser.parse_args())
 
     with open('config.toml', 'r') as config_file:
@@ -298,14 +300,11 @@ if __name__ == '__main__':
     #------------------------------------------------------------#
     ###################### Set Up Objects ########################
 
-    fault = body.Fault(config['fault']['time'], config['fault']['wheel_axis'], config['fault']['type'], config['fault']['torque_limit'])
-    fault.master_enable = config['fault']['master_enable']
-    fault.filter_coeff = config['fault']['filter_coef']
+    # fault = body.Fault(config['fault']['time'], config['fault']['wheel_axis'], config['fault']['type'], config['fault']['torque_limit'])
+    fault = body.Fault(config)
 
-    wheels_config = config['wheels']
-    wheel_module = body.WheelModule(wheels_config['mass'], wheels_config['radius'], wheels_config['height'], 
-                                    wheels_config['config'], my_utils.conv_rpm_to_rads_per_sec(wheels_config['max_speed_rpm']), wheels_config['max_torque'])
-    wheel_module.wheels[fault.wheel_num].fault = fault
+    wheel_module = body.WheelModule(config, fault)
+    # wheel_module.wheels[fault.wheel_num].fault = fault
     if config['satellite']['euler_init_en']:
         dir_init = Rotation.from_euler('xyz',config['satellite']['euler_init'],degrees=True)
     else:
@@ -313,15 +312,10 @@ if __name__ == '__main__':
     satellite_angular_v_init = np.array([0,0,0])
 
 
-    controller = body.Controller(config['controller']['enable'], k=config['controller']['k'], c=config['controller']['c'], T_max=config['controller']['T_max'], 
-                                 T_min=config['controller']['T_min'], filter_coef=config['controller']['filter_coef'], 
-                                 time_step=config['controller']['time_step'], type=config['controller']['type'],
-                                 angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init), 
-                                 adaptive_gain=config['controller']['adaptive_gain'],config=config)
-    controller.fault = fault
+    controller = body.Controller(fault=fault,angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
+                                 config=config)
 
-    satellite = Satellite(config['satellite']['dimensions'], config['satellite']['mass'],
-                          wheel_module, controller, fault, mode=config['satellite']['mode'],config=config)
+    satellite = Satellite(wheel_module, controller, fault,config=config)
 
     # Satellite Initial Conditions
     satellite.dir_init_obc = dir_init
@@ -355,6 +349,8 @@ if __name__ == '__main__':
     
     sim_time_series = np.linspace(0, sim_time, int(sim_time/sim_output_resolution_time))
 
+    if sim_config['test_mode_en']:
+        print("NB ********* Test Mode is ENABLED *********")
     #-------------------------------------------------------------#
     ###################### Simulate System ########################
     if config['simulation']['enable']:
@@ -391,8 +387,9 @@ if __name__ == '__main__':
                                             results_data['quaternion_y'][row],
                                             results_data['quaternion_z'][row],
                                             results_data['quaternion_w'][row]])
-            alpha = my_utils.conv_Rotation_obj_to_euler_int(r)
-            results_data['euler_int'].append(alpha)
+            alpha = my_utils.conv_Rotation_obj_to_alpha(r)
+
+            results_data['euler_angle_axis'].append(alpha)
 
         if config['output']['energy_enable']:
             control_energy_arr = sol.y[7:]
@@ -409,7 +406,7 @@ if __name__ == '__main__':
         settling_time = None
         if config['output']['accuracy_enable']:
             control_info = control.step_info(sysdata=results_data[f"euler_int"], T=results_data['time'])
-            euler_int_ref = my_utils.conv_Rotation_obj_to_euler_int(satellite.ref_q)
+            euler_int_ref = my_utils.conv_Rotation_obj_to_alpha(satellite.ref_q)
             accuracy = 1-np.abs((control_info['SteadyStateValue']-euler_int_ref)/euler_int_ref)
             settling_time = control_info['SettlingTime']
 
@@ -418,7 +415,8 @@ if __name__ == '__main__':
             final_q = [results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
             print(f"accuracy %: {accuracy_percent}")
             print(f"settling_time (s): {round(settling_time,3)}")
-
+        # for key,value in results_data.items():
+        #     print(f"len column {key} ",len(value))
         if LOG_FILE_NAME != None:
             LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
             output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", results_data)
@@ -443,7 +441,7 @@ if __name__ == '__main__':
         fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
         
         if satellite.wheels_control_enable:
-            rows.append(('wheel_speed', ['0','1','2']))
+            rows.append(('wheel_speed', [str(wheel.index) for wheel in wheel_module.wheels]))
 
         if controller.type == "adaptive":
             rows.append(('control_adaptive_model_output',['none']))
@@ -455,6 +453,8 @@ if __name__ == '__main__':
             row_name, axes = row
             current_plot = plots_axes[row_idx-1]
             for axis in axes:
+                if row_name == 'wheel_speed':
+                    print(f"{row_name} {axis} ")
                 if axis != 'none': 
                     name = row_name + "_" + axis
                 else: 
