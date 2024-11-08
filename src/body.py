@@ -34,108 +34,6 @@ class Body:
     
     def calc_M_inertia_inv(self):
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
-
-class Wheel(Body):
-    dimensions = {'radius': 0, 'height': 0}
-    position = np.zeros(3)
-    speed = 0
-    T = 0
-    H = 0
-    dir_vector = np.zeros(3)
-    friction_coef = 0.0001
-    config = None
-    index = 0
-
-    fault : Fault = None 
-    max_speed = 0
-    max_torque = 0
-    t_sample = 0
-    def __init__(self, config, fault):
-        self.mass = config['wheels']['mass']
-        self.dimensions['radius'] = config['wheels']['radius']
-        self.dimensions['height'] = config['wheels']['height']
-        self.max_speed = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
-        self.max_torque = config['wheels']['max_torque']
-        self.t_sample = config['controller']['time_step']
-        self.fault = fault
-    
-    def calc_M_inertia(self):
-        # Moment of inertia
-        self.M_inertia[0][0] = 0.25*self.mass*pow(self.dimensions['radius'],2) + (1/12)*self.mass*pow(self.dimensions['height'],2)
-        self.M_inertia[1][1] = self.M_inertia[0][0]
-        self.M_inertia[2][2] = 0.5*self.mass*pow(self.dimensions['radius'],2)
-        self.calc_M_inertia_inv()
-    
-    # returns angular momentum
-    # def calc_angular_momentum(self) -> np.array:
-    #     # angular_momentum = self.M_inertia@self.angular_v
-    #     # print(f"angular v {self.angular_v}")
-    #     if np.isnan(angular_momentum[0]):
-    #         raise("Nan error")
-    #     return self.speed*self.dir_vector
-    flag = False
-    flag_2 = False
-    def calc_state_rates(self, new_speed):
-        speed_prev = self.speed
-
-        if np.abs(new_speed) > self.max_speed:
-            self.speed = self.max_speed*np.sign(new_speed)
-            if not self.flag:
-                print(f"speed limit reached {self.speed} {self.index}")
-                self.flag = True
-        else:
-            self.speed = new_speed
-
-        self.T = self.M_inertia[2][2]*((self.speed - speed_prev)/self.t_sample)
-        wheel_torque_limit = self.max_torque
-
-        
-        if self.fault.master_enable and self.index == self.fault.wheel_num:
-            if self.flag == False:
-                print("catastrophic fault")
-                self.flag = True
-            if self.fault.type == "torque_limit":
-                self.T = self.fault.torque_limit*self.max_torque
-            elif self.fault.type == "catastrophic":
-                self.T = 0
-                self.speed = 0
-                self.H = 0
-                return 0, 0, 0
-        
-
-        if np.abs(self.T) > wheel_torque_limit:
-            # if not self.flag:
-            #     print("torque limit reached")
-            #     self.flag = True
-            sign = np.sign(self.T)
-            self.speed = (((sign)*(self.max_torque)*self.t_sample)/self.M_inertia[2][2])+speed_prev
-            if np.abs(new_speed) > self.max_speed:
-                self.speed = self.max_speed*np.sign(new_speed)
-
-        self.speed = my_utils.low_pass_filter(self.speed, speed_prev, 0.8)
-
-        # if not self.flag:
-            
-        #     print(f"wheel {self.index} speed {self.speed} torque {self.T}")
-        self.H = self.M_inertia[2][2]*self.speed
-        return self.speed, self.T, self.H
-        
-        
-
-class Integrator:
-    prev_val = None
-    init_val = 0
-    time_step = 0
-    def __init__(self, time_step, init_val=0):
-        self.init_val = init_val
-        self.time_step = time_step
-    
-    def integrate(self, val):
-        if self.prev_val == None:
-            self.prev_val = self.init_val
-        integrand = self.prev_val + val*self.time_step
-        self.prev_val = integrand
-        return integrand
     
 class Controller:
     enable = True
@@ -339,6 +237,90 @@ class Controller:
         
         return self.integrator_list[integrator_number].integrate(value)
 
+class Wheel(Body):
+    dimensions = {'radius': 0, 'height': 0}
+    position = np.zeros(3)
+    speed = 0
+    T = 0
+    H = 0
+    dir_vector = np.zeros(3)
+    friction_coef = 0.0001
+    config = None
+    index = 0
+
+    fault : Fault = None 
+    max_speed = 0
+    max_torque = 0
+    t_sample = 0
+    def __init__(self, config, fault):
+        self.mass = config['wheels']['mass']
+        self.dimensions['radius'] = config['wheels']['radius']
+        self.dimensions['height'] = config['wheels']['height']
+        self.max_speed = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
+        self.max_torque = config['wheels']['max_torque']
+        self.t_sample = config['controller']['time_step']
+        self.fault = fault
+    
+    def calc_M_inertia(self):
+        # Moment of inertia
+        self.M_inertia[0][0] = 0.25*self.mass*pow(self.dimensions['radius'],2) + (1/12)*self.mass*pow(self.dimensions['height'],2)
+        self.M_inertia[1][1] = self.M_inertia[0][0]
+        self.M_inertia[2][2] = 0.5*self.mass*pow(self.dimensions['radius'],2)
+        self.calc_M_inertia_inv()
+    
+    # returns angular momentum
+    # def calc_angular_momentum(self) -> np.array:
+    #     # angular_momentum = self.M_inertia@self.angular_v
+    #     # print(f"angular v {self.angular_v}")
+    #     if np.isnan(angular_momentum[0]):
+    #         raise("Nan error")
+    #     return self.speed*self.dir_vector
+    flag = False
+    flag_2 = False
+    def calc_state_rates(self, new_speed):
+        speed_prev = self.speed
+
+        if np.abs(new_speed) > self.max_speed:
+            self.speed = self.max_speed*np.sign(new_speed)
+            if not self.flag:
+                print(f"speed limit reached {self.speed} {self.index}")
+                self.flag = True
+        else:
+            self.speed = new_speed
+
+        self.T = self.M_inertia[2][2]*((self.speed - speed_prev)/self.t_sample)
+        wheel_torque_limit = self.max_torque
+
+        
+        if self.fault.master_enable and self.index == self.fault.wheel_num:
+            if self.flag == False:
+                print("catastrophic fault")
+                self.flag = True
+            if self.fault.type == "torque_limit":
+                self.T = self.fault.torque_limit*self.max_torque
+            elif self.fault.type == "catastrophic":
+                self.T = 0
+                self.speed = 0
+                self.H = 0
+                return 0, 0, 0
+        
+
+        if np.abs(self.T) > wheel_torque_limit:
+            # if not self.flag:
+            #     print("torque limit reached")
+            #     self.flag = True
+            sign = np.sign(self.T)
+            self.speed = (((sign)*(self.max_torque)*self.t_sample)/self.M_inertia[2][2])+speed_prev
+            if np.abs(new_speed) > self.max_speed:
+                self.speed = self.max_speed*np.sign(new_speed)
+
+        self.speed = my_utils.low_pass_filter(self.speed, speed_prev, 0.8)
+
+        # if not self.flag:
+            
+        #     print(f"wheel {self.index} speed {self.speed} torque {self.T}")
+        self.H = self.M_inertia[2][2]*self.speed
+        return self.speed, self.T, self.H
 
 class WheelModule():
     H = np.zeros(3)
