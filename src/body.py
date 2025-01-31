@@ -6,6 +6,7 @@ import quaternion
 import my_utils as my_utils
 import my_globals
 
+
 class Fault():
     time = 0
     enabled = False
@@ -15,6 +16,8 @@ class Fault():
     torque_limit = 1
     types = ["catastrophic", "comm_delay", "torque_limit"]
     filter_coeff = 0
+    mul_fault_matrix = None
+    add_fault_matrix = None
 
     def __init__(self, config):
         self.time = config['fault']['time']
@@ -23,6 +26,8 @@ class Fault():
         self.torque_limit = config['fault']['torque_limit']
         self.master_enable = config['fault']['master_enable']
         self.filter_coeff = config['fault']['filter_coef']
+        self.mul_fault_matrix = np.diag(config['fault']['mul_fault'])
+        self.add_fault_matrix = config['fault']['add_fault']
 
 
 class Body:
@@ -77,12 +82,13 @@ class Controller:
             my_globals.results_data['control_adaptive_model_output'] = []
             for i, axis in enumerate(my_utils.xyz_axes):
                 my_globals.results_data[f'control_theta_{axis}'] = []
-        print("controller type ", self.type)
+        print("controller type: ", self.type, " sub_type: ", config["controller"]["sub_type"])
         if self.type == "adaptive":
             print("adaptive gain ", self.adaptive_gain)
         my_globals.results_data['control_time'] = []
         my_globals.results_data['control_time'].append(0)
-        self.config = config['controller']
+        self.h = 0.1
+        self.config = config
 
     T_output_prev = 0
 
@@ -98,7 +104,9 @@ class Controller:
 
         return + K@q_error_vec - C@angular_v + np.cross(angular_v, Hnet)
     
-    sub_types = ["linear", "arctan"]
+    h = 0
+    u_prev = np.zeros(4)
+    sub_types = ["linear", "arctan", "Shen"]
     def calc_backstepping_control_torque(self, q_curr: np.quaternion, angular_v, ref_q, satellite):
         I1 = satellite.M_inertia[0][0]
         I2 = satellite.M_inertia[1][1]
@@ -108,10 +116,11 @@ class Controller:
         p3 = (I1 - I2)/I3
         alpha = 0.75
         beta = 8
-        sub_type = self.config["sub_type"]
+        sub_type = self.config["controller"]["sub_type"]
+        u = np.zeros(3)
         if sub_type not in self.sub_types:
             raise Exception(f"sub_type {sub_type} is not a valid sub_type")
-        if self.config["sub_type"] == "linear":
+        if self.config["controller"]["sub_type"] == "linear":
             s = 1
             g = 10
             e = angular_v - s*quaternion.as_vector_part(q_curr)
@@ -121,7 +130,9 @@ class Controller:
                 - g*(e[1])
             u3 = -1/2*q_curr.z-p3*angular_v[0]*angular_v[1] - s*0.5*(q_curr.w*angular_v[2]+q_curr.x*angular_v[1]-q_curr.y*angular_v[0]) \
                 - g*(e[2])
-        # elif self.config["sub_type"] == "arctan":
+            u = np.array([u1, u2, u3])
+        elif self.config["controller"]["sub_type"] == "arctan":
+            raise(Exception("arctan not implemented"))
         #     a  = [1, 1, 1]
         #     b  = [1, 1, 1]
         #     c  = [1, 1, 1]
@@ -137,9 +148,43 @@ class Controller:
         #         - g*(e[1])
         #     u3 = -1/2*q_curr.z-p3*angular_v[0]*angular_v[1] - s*0.5*phi_dot*(q_curr.w*angular_v[2]+q_curr.x*angular_v[1]-q_curr.y*angular_v[0]) \
         #         - g*(e[2])
+        elif self.config["controller"]["sub_type"] == "Shen":
+            u_max = self.config["wheels"]["max_torque"]
+            D_plus = satellite._wheel_module.D_psuedo_inv
+            eta_0 = np.linalg.norm(D_plus)
+            alpha = 0.2
+            beta = 1.8
+            k = 100
+            eta_1 = 0.1
+            upsilon = 0.01
+            c_1 = 0.01
+            c_2 = 0.1
+            k_0 = 1
+
+            Omega = np.linalg.norm(angular_v)**2 + np.linalg.norm(angular_v)**2 + 1
+            eta_2 = upsilon/Omega
+            s = angular_v - alpha*np.arctan(beta*quaternion.as_vector_part(q_curr))
+            s_norm = np.linalg.norm(s)
+            s_norm_pow2 = s_norm**2
+            f = -1*satellite._wheel_module.D@satellite._fault.mul_fault_matrix@self.u_prev
+
+            Gamma = k + s@f.reshape(-1,1)/(s_norm_pow2+eta_1**2) + self.h*Omega/(s_norm+eta_2)
+            test = u_max/(eta_0*Gamma)
+            if(s_norm >= test):
+                u = (D_plus*u_max)@s/(s_norm*eta_0)
+            else:
+                u = -1*Gamma*D_plus@s
+
+            if(np.shape(u)[0] != 4):
+                raise(Exception("invalid shape of u"))
             
-        u = np.array([u1, u2, u3])
+            # Update h
+            h_dot = -c_1*self.h + c_2*(Omega*s_norm_pow2)/(s_norm + eta_2) 
+            self.h = self.h + h_dot*self.time_step
+            self.u_prev = u
+
         return u
+
 
     def calc_torque_control_output(self, q_curr : np.quaternion,  angular_v : list[float], ref_q : np.quaternion, satellite, wheels_H, t) -> np.array:
 
@@ -150,14 +195,18 @@ class Controller:
             if self.type == "adaptive":
                 T_output = self.calc_adaptive_control_torque_output(T_output, q_curr, ref_q)
 
-        elif self.type == "backstepping":    
+        elif self.type == "backstepping": 
+            # if count_debug < COUNT_DEBUG_MAX:
+            # print(f"backstepping control")
+                # count_debug += 1
             T_output = self.calc_backstepping_control_torque(q_curr, angular_v, ref_q, satellite)
-
-        T_output = self.limit_torque(T_output)
+        else:
+            raise Exception(f"controller type {self.type} is not a valid type")
+        # print(f"T_output {T_output.shape}")
+        # T_output = self.limit_torque(T_output)
         
-        T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
+        # T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
         
-
         return T_output
     
     
@@ -180,7 +229,7 @@ class Controller:
     theta_prev = 0
     def calc_adaptive_control_torque_output(self, T_com, q_meas : np.quaternion, q_ref : np.quaternion):
         q_model = self.calc_adaptive_model_output(q_ref)
-        my_globals.results_data['control_adaptive_model_output'].append(my_utils.conv_Rotation_obj_to_alpha(my_utils.conv_numpy_to_Rotation_obj_q(q_model)))
+        my_globals.results_data['control_adaptive_model_output'].append(my_utils.conv_Rotation_obj_to_euler_axis_angle(my_utils.conv_numpy_to_Rotation_obj_q(q_model)))
         q_error = q_meas.inverse()*q_model
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
         q_model_vec = np.array([q_model.x, q_model.y, q_model.z])
@@ -229,13 +278,6 @@ class Controller:
         else:
             raise("invalid fault type")
         return M
-    
-
-    def integrate(self, value, integrator_number : int):
-        if integrator_number not in self.integrator_list:
-            self.integrator_list.append(Integrator())
-        
-        return self.integrator_list[integrator_number].integrate(value)
 
 class Wheel(Body):
     dimensions = {'radius': 0, 'height': 0}
@@ -266,7 +308,6 @@ class Wheel(Body):
         self.M_inertia[0][0] = 0.25*self.mass*pow(self.dimensions['radius'],2) + (1/12)*self.mass*pow(self.dimensions['height'],2)
         self.M_inertia[1][1] = self.M_inertia[0][0]
         self.M_inertia[2][2] = 0.5*self.mass*pow(self.dimensions['radius'],2)
-        self.calc_M_inertia_inv()
     
     # returns angular momentum
     # def calc_angular_momentum(self) -> np.array:
@@ -275,8 +316,6 @@ class Wheel(Body):
     #     if np.isnan(angular_momentum[0]):
     #         raise("Nan error")
     #     return self.speed*self.dir_vector
-    flag = False
-    flag_2 = False
     def calc_state_rates(self, new_speed):
         speed_prev = self.speed
 
@@ -292,33 +331,27 @@ class Wheel(Body):
         wheel_torque_limit = self.max_torque
 
         
-        if self.fault.master_enable and self.index == self.fault.wheel_num:
-            if self.flag == False:
-                print("catastrophic fault")
-                self.flag = True
-            if self.fault.type == "torque_limit":
-                self.T = self.fault.torque_limit*self.max_torque
-            elif self.fault.type == "catastrophic":
-                self.T = 0
-                self.speed = 0
-                self.H = 0
-                return 0, 0, 0
+        if self.fault.master_enable:
+            wheel_torque_limit = self.fault.mul_fault_matrix[self.index]*self.max_torque
+            # if self.fault.type == "torque_limit":
+            #     self.T = self.fault.torque_limit*self.max_torque
+            # elif self.fault.type == "catastrophic":
+            #     self.T = 0
+            #     self.speed = 0
+            #     self.H = 0
+            #     return 0, 0, 0
         
 
         if np.abs(self.T) > wheel_torque_limit:
-            # if not self.flag:
-            #     print("torque limit reached")
-            #     self.flag = True
             sign = np.sign(self.T)
-            self.speed = (((sign)*(self.max_torque)*self.t_sample)/self.M_inertia[2][2])+speed_prev
+            self.speed = (((sign)*(wheel_torque_limit)*self.t_sample)/self.M_inertia[2][2])+speed_prev
+            # if(wheel_torque_limit==0):
+            #     self.speed = 0
             if np.abs(new_speed) > self.max_speed:
                 self.speed = self.max_speed*np.sign(new_speed)
+            self.T = wheel_torque_limit
 
         self.speed = my_utils.low_pass_filter(self.speed, speed_prev, 0.8)
-
-        # if not self.flag:
-            
-        #     print(f"wheel {self.index} speed {self.speed} torque {self.T}")
         self.H = self.M_inertia[2][2]*self.speed
         return self.speed, self.T, self.H
 
@@ -339,9 +372,10 @@ class WheelModule():
             self.D = np.eye(3)
         elif self.layout == "pyramid":
             self.num_wheels = 4
-            self.D = 0.5774*np.array([[1,-1,-1,1],
-                            [1,1,-1,-1],
-                            [1,1,1,1]])
+            beta = np.radians(30)
+            self.D = np.array([cos(beta)*np.array([1.0,0.0,-1.0,0.0]),
+                            cos(beta)*np.array([0.0,1.0,0.0,-1.0]),
+                            sin(beta)*np.array([1.0,1.0,1.0,1.0])])
 
         elif self.layout ==  "tetrahedron":
             self.num_wheels = 4
@@ -350,6 +384,11 @@ class WheelModule():
                             [-0.3333,-0.3333,-0.3333,1]]) 
             # elif len(wheels) == 1:
             #     self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
+        elif self.layout == "custom":
+            self.num_wheels = config['wheels']['num_wheels']
+            self.D = np.array(config['wheels']['D'])
+            if self.D.shape[1] != self.num_wheels or self.D.shape[0] != 3:
+                raise(Exception(f"invalid D matrix shape {self.D.shape}"))
         else:
             raise(Exception(f"{self.layout} is not a valid wheel layout. \nerror unable to set up wheel layout"))
         
@@ -358,6 +397,7 @@ class WheelModule():
             wheel.max_speed = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
             wheel.max_torque = config['wheels']['max_torque']
             my_globals.results_data['wheel_speed_' + str(i)] = []
+            my_globals.results_data['wheel_torque_' + str(i)] = []
             wheel.dir_vector = np.transpose(self.D)[i]
             wheel.calc_M_inertia()
             wheel.index = i
@@ -371,11 +411,18 @@ class WheelModule():
         return (coeff)*value_prev + (1 - coeff)*value
     
     H_dot_prev = np.zeros(3)
+    
     def calc_state_rates(self, u_c : np.array, sampling_time):
         H_vec_init = np.zeros(3)
         H_vec_result = np.zeros(3)
         H_dot = np.zeros(3)
-        T_c = self.D_psuedo_inv@u_c
+        if len(u_c) == self.D.shape[1]:
+           T_c = u_c
+           pass
+        elif len(u_c) == 3:
+            T_c = self.D_psuedo_inv@u_c
+        else:
+            raise(Exception(f"invalid control input shape: {u_c.shape}"))
 
         for wheel in self.wheels:
             H_vec_init = H_vec_init + wheel.H*wheel.dir_vector
@@ -409,7 +456,6 @@ class Orbit():
             self.altitude = altitude
         else:
             raise(Exception("invalid altitude given: altitude must be greater than 100km"))
-        print(f"altitude {altitude}m")
         # place into circular sun synchronous orbit
         RAAN_rate = 2*np.pi/(365.26*24*3600)
         earth_radius = 6378e3
@@ -423,8 +469,6 @@ class Orbit():
         self.inclination = arccos(np.power(RAAN_rate*(1-np.power(e,2)),2)*np.power(self.radius,7/2)/((-3/2)*
                                     np.sqrt(self.mu)*J*np.power(earth_radius,2)))
         
-        print("inclination ", np.degrees(self.inclination), "deg")
-
         self.v = np.sqrt(G*m_earth/self.radius)
         self.latitude = 0
 
@@ -433,7 +477,6 @@ class Orbit():
 
         return 
         
-
 class Disturbances():
     orbit : Orbit = None
     def __init__(self):
@@ -484,3 +527,6 @@ class Disturbances():
         # print(np.cross(u_e,satellite.M_inertia@u_e))
         # print(satellite.M_inertia@u_e)
         return T_grav
+
+    def calc_dist_torque_Shen(t):
+        return np.ones(3)*-0.005*np.sin(t)
