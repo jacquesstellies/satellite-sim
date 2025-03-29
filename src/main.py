@@ -253,8 +253,8 @@ def parse_args():
             overide = config['output']['log_file_name_overide']
             if overide == "None" or overide == "":
                 LOG_FILE_NAME = config['controller']['type']
-                if(config['controller']['type'] == "adaptive"):
-                    LOG_FILE_NAME += '_' + config['controller']['sub_type']
+                if(config['controller']['type'] != "q_feedback"):
+                    LOG_FILE_NAME += ('_' + config['controller']['sub_type'])
                 LOG_FILE_NAME += '_' + config['wheels']['config']
                 if config['fault']['master_enable']:
                     LOG_FILE_NAME += '_fault'
@@ -333,14 +333,15 @@ if __name__ == '__main__':
 
     initial_values = np.hstack(initial_values)
 
+    test_mode_en = config['simulation']['test_mode_en']
     # Simulation parameters
     sim_config = config['simulation']
-    sim_time = sim_config['duration'] if not sim_config['test_mode_en'] else sim_config['test_duration']
-    sim_output_resolution_time = sim_config['resolution'] if not sim_config['test_mode_en'] else sim_config['test_resolution']
+    sim_time = sim_config['duration'] if not test_mode_en else sim_config['test_duration']
+    sim_output_resolution_time = sim_config['resolution'] if not test_mode_en else sim_config['test_resolution']
     
     sim_time_series = np.linspace(0, sim_time, int(sim_time/sim_output_resolution_time))
 
-    if sim_config['test_mode_en']:
+    if test_mode_en:
         print("NB ********* Test Mode is ENABLED *********")
     #-------------------------------------------------------------#
     ###################### Simulate System ########################
@@ -363,7 +364,10 @@ if __name__ == '__main__':
             if key[:7] == "control":
                 results_data[key] = interpolate_data(value, results_data['control_time'], sim_time_series)[:]
             else:
-                results_data[key] = interpolate_data(value, results_data['time'], sim_time_series)[:]
+                try:
+                    results_data[key] = interpolate_data(value, results_data['time'], sim_time_series)[:]
+                except:
+                    print(f"Error interpolating {key} {value}")
     
     results_data['time'] = sim_time_series
 
@@ -385,6 +389,17 @@ if __name__ == '__main__':
     
     results_data['euler_int'] = cumulative_trapezoid(results_data['euler_axis'], results_data['time'], initial=0)
 
+    df = pd.DataFrame(results_data)
+    q = np.array([results_data["quaternion_x"], 
+                                        results_data["quaternion_y"], 
+                                        results_data["quaternion_z"], 
+                                        results_data["quaternion_w"]])
+    r =  Rotation.from_quat(quat=q.T)
+    [results_data['euler_yaw'],results_data['euler_pitch'], results_data['euler_roll']] = r.as_euler('zyx', degrees=True).T
+    # e321 = r.as_euler('zyx', degrees=True)
+
+    # print(results_data['euler_1'])
+    # exit()
     if config['output']['energy_enable']:
         control_energy_arr = sol.y[7:]
         control_energy_per_axis = {}
@@ -415,11 +430,17 @@ if __name__ == '__main__':
             print(f"accuracy %: {accuracy_percent}")
             print(f"settling_time (s): {round(settling_time,3)}")
             print(f"steady_state (s): {round(steady_state,3)}")
-            print(f"final euler: {np.degrees(final_euler)} deg xyz")
+            # print(f"final euler: {final_euler} deg xyz")
+            # print(f"euler error: {euler_axis_ref - final_euler} deg xyz")
+
+            control_info_y = control.step_info(sysdata=results_data['euler_yaw'],SettlingTimeThreshold=0.002, T=results_data['time'])
+            control_info_p = control.step_info(sysdata=results_data['euler_pitch'],SettlingTimeThreshold=0.002, T=results_data['time'])
+            control_info_r = control.step_info(sysdata=results_data['euler_roll'],SettlingTimeThreshold=0.002, T=results_data['time'])
+            print(f"steady state error: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
         except Exception as e:
             print(f"Error calculating accuracy: {e}")
 
-    if LOG_FILE_NAME != None:
+    if LOG_FILE_NAME != None and test_mode_en is False:
         LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
         clear_log_file(fr"{LOG_FOLDER_PATH}\{LOG_FILE_NAME_RESULTS}")
         output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", results_data)
@@ -430,12 +451,12 @@ if __name__ == '__main__':
             log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"settling_time (s): {round(settling_time,3)}",    False)
         log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"accuracy %: {accuracy_percent}", False)
         log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, control_energy_log_output, False)
-        
+    
     #--------------------------------------------------------------#
     ###################### Output to Graphs ########################
     cols = 2
-    rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('torque',my_utils.xyz_axes), \
-            ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
+    rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('euler', ['yaw','pitch', 'roll']), \
+            ('torque',my_utils.xyz_axes), ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
     
     if satellite.wheels_control_enable:
         rows.append(('wheel_speed', [str(wheel.index) for wheel in wheel_module.wheels]))
@@ -492,7 +513,7 @@ if __name__ == '__main__':
 
     plt.show()
 
-    if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
-        fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
+    if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and test_mode_en is False:
 
+        fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
 
