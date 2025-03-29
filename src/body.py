@@ -161,28 +161,49 @@ class Controller:
             upsilon = 0.01
             c_1 = 0.01
             c_2 = 0.1
-            k_0 = 1
 
-            Omega = np.linalg.norm(angular_v)**2 + np.linalg.norm(angular_v)**2 + 1
-            eta_2 = upsilon/Omega
+            Omega = np.linalg.norm(angular_v)**2 + np.linalg.norm(angular_v) + 1
             s = angular_v - alpha*np.arctan(beta*quaternion.as_vector_part(q_curr))
             s_norm = np.linalg.norm(s)
             s_norm_pow2 = s_norm**2
-            f = -1*satellite._wheel_module.D@satellite._fault.mul_fault_matrix@self.u_prev
+            eta_2 = upsilon/Omega
 
-            Gamma = k + s@f.reshape(-1,1)/(s_norm_pow2+eta_1**2) + self.h*Omega/(s_norm+eta_2)
-            test = u_max/(eta_0*Gamma)
-            if(s_norm >= test):
-                u = (D_plus*u_max)@s/(s_norm*eta_0)
-            else:
-                u = -1*Gamma*D_plus@s
-
-            if(np.shape(u)[0] != 4):
-                raise(Exception("invalid shape of u"))
-            
             # Update h
             h_dot = -c_1*self.h + c_2*(Omega*s_norm_pow2)/(s_norm + eta_2) 
             self.h = self.h + h_dot*self.time_step
+
+            D = satellite._wheel_module.D
+            E = satellite._fault.mul_fault_matrix
+            if True:
+                A = D_plus
+                B = np.atleast_2d(s).T
+                c = -1*(k + self.h*Omega/(s_norm + eta_2))
+                C = D_plus@np.atleast_2d(s).T*c
+                phi = -1*(1 / (s_norm**2 + eta_1**2))
+                F = np.atleast_2d(s)@D@E*phi
+                # print(f"A {A.shape}")
+                # print(f"B {B.shape}")
+                # print(f"C {C.shape}")
+                # print(f"F {F.shape}")
+            
+                u = C + (F@C/(1 - F@A@B))*A@B
+                u = u.reshape(-1)
+            else:
+                if not satellite._fault.master_enable:
+                    f = np.ones(3)
+                else:
+                    f = -1*satellite._wheel_module.D@satellite._fault.mul_fault_matrix@self.u_prev
+
+                Gamma = k + s@f.reshape(-1,1)/(s_norm_pow2+eta_1**2) + self.h*Omega/(s_norm+eta_2)
+                test = u_max/(eta_0*Gamma)
+                if(s_norm >= test):
+                    u = (D_plus*u_max)@s/(s_norm*eta_0)
+                else:
+                    u = -1*Gamma*D_plus@s
+
+            if(np.shape(u)[0] != satellite._wheel_module.num_wheels):
+                raise(Exception("invalid shape of u"))
+                
             self.u_prev = u
 
         return u
