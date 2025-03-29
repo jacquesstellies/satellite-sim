@@ -102,7 +102,9 @@ class Controller:
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
         Hnet = M_inertia@(angular_v) + wheels_H
 
-        return + K@q_error_vec - C@angular_v + np.cross(angular_v, Hnet)
+        # return + K@q_error_vec - C@angular_v + np.cross(angular_v, Hnet)
+
+        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@angular_v
     
     h = 0
     u_prev = np.zeros(4)
