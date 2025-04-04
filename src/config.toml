@@ -2,9 +2,11 @@ debug_log = false
 
 [controller]
 enable = true
-c = [0, 0, 0]
-k = 1
-T_max = 100
+c = [10, 10, 10]
+k = 6
+kj = 0.1422
+kd = 0.5333
+T_max = 0.2
 T_min = 0
 filter_coef = 0
 time_step = 0.1

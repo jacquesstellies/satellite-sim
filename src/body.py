@@ -226,7 +226,7 @@ class Controller:
         else:
             raise Exception(f"controller type {self.type} is not a valid type")
         # print(f"T_output {T_output.shape}")
-        # T_output = self.limit_torque(T_output)
+        T_output = self.limit_torque(T_output)
         
         # T_output = self.low_pass_filter(T_output, self.T_output_prev, self.filter_coef)
         
@@ -355,7 +355,7 @@ class Wheel(Body):
 
         
         if self.fault.master_enable:
-            wheel_torque_limit = self.fault.mul_fault_matrix[self.index]*self.max_torque
+            wheel_torque_limit = self.fault.mul_fault_matrix[self.index][self.index]*self.max_torque
             # if self.fault.type == "torque_limit":
             #     self.T = self.fault.torque_limit*self.max_torque
             # elif self.fault.type == "catastrophic":
@@ -552,4 +552,4 @@ class Disturbances():
         return T_grav
 
     def calc_dist_torque_Shen(t):
-        return np.ones(3)*-0.005*np.sin(t)
+        return np.array([-1, 1, -1])*-0.005*np.sin(t)
