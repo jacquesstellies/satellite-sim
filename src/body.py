@@ -181,10 +181,6 @@ class Controller:
                 C = D_plus@np.atleast_2d(s).T*c
                 phi = -1*(1 / (s_norm**2 + eta_1**2))
                 F = np.atleast_2d(s)@D@E*phi
-                # print(f"A {A.shape}")
-                # print(f"B {B.shape}")
-                # print(f"C {C.shape}")
-                # print(f"F {F.shape}")
             
                 u = C + (F@C/(1 - F@A@B))*A@B
                 u = u.reshape(-1)
@@ -339,13 +335,14 @@ class Wheel(Body):
     #     if np.isnan(angular_momentum[0]):
     #         raise("Nan error")
     #     return self.speed*self.dir_vector
+    flag = False
     def calc_state_rates(self, new_speed):
         speed_prev = self.speed
 
         if np.abs(new_speed) > self.max_speed:
             self.speed = self.max_speed*np.sign(new_speed)
             if not self.flag:
-                print(f"speed limit reached {self.speed} {self.index}")
+                # print(f"speed limit reached {self.speed} {self.index}")
                 self.flag = True
         else:
             self.speed = new_speed
