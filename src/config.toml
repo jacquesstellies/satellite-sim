@@ -2,7 +2,7 @@ debug_log = false
 
 [controller]
 enable = true
-c = [10, 10, 10]
+c = [ 10, 10, 10,]
 k = 6
 kj = 0.1422
 kd = 0.5333
@@ -10,51 +10,49 @@ T_max = 0.2
 T_min = 0
 filter_coef = 0
 time_step = 0.1
-type="backstepping" # options = [q_feedback, backstepping, adaptive]
-sub_type="Shen"
+type = "backstepping"
+sub_type = "Shen"
 adaptive_gain = 0.1
 
 [wheels]
-config = "custom" # options = [ortho, pyramid, tetrahedron]
+config = "custom"
 mass = 0.31
 radius = 0.066
 height = 0.025
-max_speed_rpm = 10000 #rpm
+max_speed_rpm = 10000
 max_torque = 0.2
 num_wheels = 4
-D = [[-1, -1, 1, 1], [1, -1, -1, 1], [1, 1, 1, 1]]
+D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
 
 [fault]
-type = "catastrophic" # options = [catastrophic, comm_delay, torque_limit]
-torque_limit = 0.5 # torque limit fraction
+type = "catastrophic"
+torque_limit = 0.5
 filter_coef = 0.99
 wheel_num = 0
-mul_fault = [0.6, 0.2, 1.0, 1.0] # wheel multiplicative fault (1.0 = no fault)
-add_fault = [0, 0, 0, 0] # wheel additive fault
+mul_fault = [ 0.0, 1.0, 1.0, 1.0,]
+add_fault = [ 0, 0, 0, 0,]
 time = 0
-master_enable = false
+master_enable = true
 update_rate = 0.5
 
 [satellite]
-euler_init_en = false
-euler_init = [270, 0, 0]
-q_init = [-0.5,0.3,0.4,0.7071]
+euler_init_en = true
+euler_init = [ 120, 0, 0,]
+q_init = [ -0.5, 0.3, 0.4, 0.7071,]
 mode = "direction"
-ref_T = [0, 1, 0]
+ref_T = [ 0, 1, 0,]
 use_ref_euler = false
-ref_euler = [0, 0, 5]
+ref_euler = [ 0, 0, 5,]
 use_ref_q = true
-ref_q = [0, 0, 0, 1]
+ref_q = [ 0, 0, 0, 1,]
 wheels_control_enable = true
-
-dimensions = {'x' = 0.3, 'y' = 0.3, 'z' = 0.3}
 mass = 12
-M_Inertia = [ [10.0, 1.2, 0.5], [1.2, 19.0, 1.5], [0.5, 1.5, 25.0] ]
+M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
 inertia_override = true
 
 [simulation]
 enable = true
-duration = 100
+duration = 300
 resolution = 0.1
 test_mode_en = false
 test_duration = 10
@@ -63,8 +61,13 @@ test_resolution = 1
 [output]
 accuracy_enable = true
 energy_enable = true
-log_enable = true # all fields below are only valid if log_enable is true
+log_enable = true
 append_date = true
 pdf_output_enable = true
 log_file_name_overide = "None"
 separate_plots_display = false
+
+[satellite.dimensions]
+x = 0.3
+y = 0.3
+z = 0.3

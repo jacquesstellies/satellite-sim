@@ -1,22 +1,21 @@
+from satellite import Satellite
+from controller import Controller
+from fault import Fault
+from wheels import WheelModule
+
+import my_utils
+import my_globals
+
+import os
 import numpy as np
 from scipy.integrate import solve_ivp, cumulative_trapezoid
 from scipy.spatial.transform import Rotation
-import scipy.interpolate as interpolate
 import matplotlib.pyplot as plt
-import math
-import quaternion
-import my_utils as my_utils
-import logging
 import pandas as pd
 import argparse
 import toml
 import datetime
 import control
-import body
-import my_globals
-import csv
-import os
-import json
 from inspect import currentframe, getframeinfo
 
 DEBUG = True
@@ -25,177 +24,6 @@ DEBUG = True
 
 results_data = my_globals.results_data
 
-class Face():
-    r_cop_to_com = np.zeros(3)
-    area = 0
-    norm_vec = np.zeros(3)
-    
-class Satellite(body.Body):
-
-    _logger = None
-    wheel_offset = 0 # offset of wheel center of mass from edge of device
-
-    _controller : body.Controller = None
-    _wheel_module : body.WheelModule = None
-    _fault : body.Fault = None
-
-    mode : str = ""
-    modes = ["direction", "torque"]
-
-    dir_init = Rotation.from_quat([0,0,0,1])
-
-    faces : list[Face] = []
-    _disturbances : body.Disturbances = None
-
-    config = None
-    def __init__(self, _wheel_module : body.WheelModule, controller : body.Controller, 
-                 fault : body.Fault, wheel_offset = 0, logger = None, config=None):
-        self.config = config
-        self._wheel_module = _wheel_module
-        if _wheel_module.config == "standard":
-            self._wheel_module.wheels[0].position[0] = self.dimensions['x']-config
-            self._wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
-            self._wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
-        # if _wheel_module.config == "pyramid":
-        #     self._wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
-        #     self._wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
-        #     self._wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
-        #     self._wheel_module.wheels[3].position[0] = self.dimensions['x']-wheel_offset
-        self._controller = controller
-        self._next_control_time_step = controller.time_step
-        self._logger = logger
-        self._fault = fault
-        self.mode = config['satellite']['mode']
-        if self.mode not in self.modes:
-            raise Exception(f"mode {self.mode} not available")
-        
-        self.dimensions, self.mass = config['satellite']['dimensions'], config['satellite']['mass']
-
-        if self.config['satellite']['inertia_override']:
-            M_inertia = np.array(config['satellite']['M_Inertia'])
-            if M_inertia.shape == (3,3):
-                self.M_inertia = M_inertia
-            elif M_inertia.shape == (3,):
-                self.M_inertia = np.diag(M_inertia)
-            else:
-                raise Exception("inertia override must be 3x3 or 3x1 matrix")
-            print("Satellite inertia ",self.M_inertia)
-            self.calc_M_inertia_inv()
-        else:
-            self.calc_M_inertia()
-        self._disturbances = body.Disturbances()
-        self.calc_face_properties()
-        self.ref_T = np.array(config['satellite']['ref_T'])
-        self.wheels_control_enable = config['satellite']['wheels_control_enable']
-        if not self.wheels_control_enable and self._controller.type == "backstepping" and self._controller.sub_type == "Shen":
-            raise Exception("this backstepping controller requires wheels control enabled")
-
-    def calc_face_properties(self):
-        dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
-        for i in range(3):
-            for j in range(2):
-                face = Face()
-                face.norm_vec = np.zeros(3)
-                face.norm_vec[i] = 1*(1,-1) [j == 1]
-                face.area = 1
-                for k, axis in enumerate(face.norm_vec):
-                    if axis == 0:
-                        face.area *= dim_array[k]
-                face.r_cop_to_com = face.norm_vec*0.5*dim_array              
-                self.faces.append(face)
-
-    def calc_M_inertia_body(self):
-
-        M_inertia = np.zeros((3,3))
-        # use cuboid for mass moment inertia
-        M_inertia[0][0] = 1/12*self.mass*(pow(self.dimensions['y'],2)+pow(self.dimensions['z'],2))
-        M_inertia[1][1] = 1/12*self.mass*(pow(self.dimensions['x'],2)+pow(self.dimensions['z'],2))
-        M_inertia[2][2] = 1/12*self.mass*(pow(self.dimensions['x'],2)+pow(self.dimensions['y'],2))
-        return M_inertia
-
-    def calc_M_inertia_peri(self):
-        M_inertia = np.zeros((3,3))
-        if self._wheel_module.wheels is not None:
-            M_inertia_indv_wheels = 0
-            M_inertia_point_mass_wheels = 0
-
-            for wheel in self._wheel_module.wheels:
-                M_inertia_indv_wheels += wheel.M_inertia
-                M_inertia_point_mass_wheels += my_utils.calc_M_inertia_point_mass(wheel.position, self.mass)
-
-        return M_inertia
-
-    def calc_M_inertia(self):
-        self.M_inertia = self.calc_M_inertia_body() #+ self.calc_M_inertia_peri()
-
-        self.calc_M_inertia_inv()
-
-    ref_q = Rotation.from_quat([0,0,0,1])
-    ref_T = np.zeros(3)
-    wheels_control_enable = True
-    _next_control_time_step = 0.1
-    wheels_H_rate_result = np.zeros(3)
-    wheels_H_result = np.zeros(3)
-    wheels_speed = np.zeros(3)
-    T_controller_com = np.zeros(3)
-    def calc_state_rates(self, t, y):
-
-        sat_angular_v_input = y[:3]
-        q_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
-        sat_angular_acc_result = [0]*3
-        q_rate_result = np.quaternion(1,0,0,0)
-        if self._controller.enable is True:            
-            if t == 0.0:
-                self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, self, self._wheel_module.H, t)
-            if t > self._next_control_time_step:
-                if self.mode == "direction":
-                    self.T_controller_com = self._controller.calc_torque_control_output(q_input, sat_angular_v_input, self.ref_q, self, self._wheel_module.H, t)
-                elif self.mode == "torque":
-                    self.T_controller_com = self.ref_T
-                self._next_control_time_step += self._controller.time_step
-                if self.wheels_control_enable:
-                    self.wheels_H_rate_result, self.wheels_H_result = self._wheel_module.calc_state_rates(self.T_controller_com, controller.time_step)
-
-            if t > self._fault.time and self._fault.master_enable:
-                self._fault.enabled = True
-        if self.wheels_control_enable:
-            T_controller = self.wheels_H_rate_result
-        else:
-            T_controller = self.T_controller_com
-        T_aero = self._disturbances.calc_aero_torque(satellite, q_input)
-        T_grav = self._disturbances.calc_grav_torque(satellite, q_input)
-        T_dist = (T_aero + T_grav)
-
-        if self.config['controller']['type'] == "adaptive" and self.config['controller']['sub_type'] == "Shen":
-            T_dist = self._disturbances.calc_dist_torque_Shen(t)
-
-        Hnet = self.M_inertia@(sat_angular_v_input) + self.wheels_H_result
-        sat_angular_acc_result = self.M_inertia_inv@(T_controller + T_dist - np.cross(sat_angular_v_input,Hnet))
-
-        # put the inertial velocity in q form
-        inertial_v_q = np.quaternion(0, sat_angular_v_input[0], sat_angular_v_input[1], sat_angular_v_input[2])
-
-        q_rate_result = 0.5*q_input*inertial_v_q
-        q_rate_result = [q_rate_result.x, q_rate_result.y, q_rate_result.z, q_rate_result.w]
-        results_data['time'].append(t)
-
-        for i, axis in enumerate(my_utils.xyz_axes):
-            results_data['torque_'+ axis].append(T_controller[i])
-            results_data['angular_acc_'+ axis].append(sat_angular_acc_result[i])
-            results_data['T_dist_' + axis].append(T_dist[i])
-            
-        for i, wheel in enumerate(self._wheel_module.wheels):
-            results_data['wheel_speed_' + str(i)].append(wheel.speed)
-            results_data['wheel_torque_' + str(i)].append(wheel.T)
-
-        if self.wheels_control_enable:
-            control_power_result = np.abs(self.wheels_H_rate_result * sat_angular_v_input)
-        else:
-            control_power_result = np.abs(self.T_controller_com * sat_angular_v_input)
-
-
-        results = [sat_angular_acc_result, q_rate_result, control_power_result]
-        return np.hstack(results)
     
 # END DEF class Satellite()
 
@@ -215,20 +43,6 @@ def log_to_file(path, file_name, string, print_c=True):
     with open(fr'{path}\{file_name}.csv', 'a+') as file:
         file.write(string+'\n')
         
-def calc_yaw_pitch_roll_rates(data_in):
-    
-    inertial_rates = data_in[:3]
-    
-    r = Rotation.from_quat([data_in[3], data_in[4], data_in[5], data_in[6]])
-
-    yaw, pitch, roll = r.as_euler('zyx')
-    
-    yaw_rate = 1/np.cos(pitch)*(inertial_rates[1]*np.sin(roll)+inertial_rates[2]*np.cos(roll))
-    pitch_rate = inertial_rates[1]*np.cos(roll)-inertial_rates[2]*np.sin(roll)
-    roll_rate = inertial_rates[0]+inertial_rates[1]*np.tan(pitch)*np.sin(roll)+inertial_rates[2]*np.tan(pitch)*np.cos(roll)
-
-    return [yaw, pitch, roll, yaw_rate, pitch_rate, roll_rate]
-
 def interpolate_data(data, time_series, time_series_new):
     return np.interp(time_series_new, time_series, data)
 
@@ -300,9 +114,9 @@ class Simulation:
             #------------------------------------------------------------#
         ###################### Set Up Objects ########################
         self.config = config
-        fault = body.Fault(config)
+        fault = Fault(config)
 
-        wheel_module = body.WheelModule(config, fault)
+        wheel_module = WheelModule(config, fault)
         if config['satellite']['euler_init_en']:
             dir_init = Rotation.from_euler('xyz',config['satellite']['euler_init'],degrees=True)
         else:
@@ -310,7 +124,7 @@ class Simulation:
         satellite_angular_v_init = np.array([0,0,0])
 
 
-        controller = body.Controller(fault=fault,angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
+        controller = Controller(fault=fault,angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
                                     config=config)
 
         self.satellite = Satellite(wheel_module, controller, fault, config=config)
@@ -480,7 +294,8 @@ class Simulation:
             
             ax_separate.set_xlabel('time (s)')
             ax_separate.set_ylabel(label)
-            ax_separate.legend()
+            if ax_separate.get_legend_handles_labels()[0] != []:
+                ax_separate.legend()
             
             if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
                 if not os.path.exists(fr"..\data_logs\{LOG_FILE_NAME}\graphs"):
@@ -496,18 +311,19 @@ class Simulation:
         plots_axes = ax_as_np_array.flatten()
         for row_idx, row in enumerate(rows):
             row_name, axes, label = row
-            current_plot = plots_axes[row_idx-1]
+            current_plot : plt.Axes = plots_axes[row_idx-1]
             for axis in axes:
                 if axis != 'none': 
                     name = row_name + "_" + axis
-                    current_plot.plot(results_data['time'], results_data[name], label=axis)
                 else: 
+                    axis = None
                     name = row_name
-                    current_plot.plot(results_data['time'], results_data[name])
+                current_plot.plot(results_data['time'], results_data[name], label=axis)
 
             current_plot.set_xlabel('time (s)')
             current_plot.set_ylabel(label)
-            current_plot.legend()
+            if current_plot.get_legend_handles_labels()[0] != []:
+                current_plot.legend()
 
             plt.subplots_adjust(wspace=0.5, hspace=0.5)
 
