@@ -90,5 +90,5 @@ class Disturbances():
         # print(satellite.M_inertia@u_e)
         return T_grav
 
-    def calc_dist_torque_Shen(t):
+    def calc_dist_torque_Shen(self, t):
         return np.array([-1, 1, -1])*-0.005*np.sin(t)

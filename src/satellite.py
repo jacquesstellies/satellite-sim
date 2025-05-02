@@ -148,12 +148,13 @@ class Satellite(Body):
             T_controller = self.wheels_H_rate_result
         else:
             T_controller = self.T_controller_com
-        T_aero = self._disturbances.calc_aero_torque(self, q_input)
-        T_grav = self._disturbances.calc_grav_torque(self, q_input)
-        T_dist = (T_aero + T_grav)
 
-        if self.config['controller']['type'] == "adaptive" and self.config['controller']['sub_type'] == "Shen":
-            T_dist = self._disturbances.calc_dist_torque_Shen(t)
+        # T_aero = self._disturbances.calc_aero_torque(self, q_input)
+        # T_grav = self._disturbances.calc_grav_torque(self, q_input)
+        # T_dist = (T_aero + T_grav)
+
+        # if self.config['controller']['type'] == "adaptive" and self.config['controller']['sub_type'] == "Shen":
+        T_dist = self._disturbances.calc_dist_torque_Shen(t)
 
         Hnet = self.M_inertia@(sat_angular_v_input) + self.wheels_H_result
         sat_angular_acc_result = self.M_inertia_inv@(T_controller + T_dist - np.cross(sat_angular_v_input,Hnet))

@@ -17,6 +17,7 @@ import toml
 import datetime
 import control
 from inspect import currentframe, getframeinfo
+import cProfile
 
 DEBUG = True
 
@@ -173,8 +174,7 @@ class Simulation:
         return sol
     
     def collect_results(self, sol):
-        if os.path.exists(LOG_FOLDER_PATH) is False:
-            os.mkdir(LOG_FOLDER_PATH)
+
         # Put results into data object
         for key, value in results_data.items():
             if key == 'time':
@@ -238,8 +238,8 @@ class Simulation:
 
     def calc_accuracy_output_results(self):
         try:
-            euler_axis_init = my_utils.conv_Rotation_obj_to_euler_axis_angle(satellite.dir_init)
-            euler_axis_ref = my_utils.conv_Rotation_obj_to_euler_axis_angle(satellite.ref_q)
+            euler_axis_init = my_utils.conv_Rotation_obj_to_euler_axis_angle(self.satellite.dir_init)
+            euler_axis_ref = my_utils.conv_Rotation_obj_to_euler_axis_angle(self.satellite.ref_q)
             control_info = control.step_info(sysdata=results_data[f"euler_int"], 
                                             SettlingTimeThreshold=0.002, T=results_data['time'])
             self.steady_state = control_info['SteadyStateValue']
@@ -264,12 +264,13 @@ class Simulation:
             print(f"Error calculating accuracy: {e}")
 
     def log_output_to_file(self, LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en):
-        
+        if os.path.exists(LOG_FOLDER_PATH) is False:
+            os.mkdir(LOG_FOLDER_PATH)
         if LOG_FILE_NAME != None and test_mode_en is False:
             LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
             # clear_log_file(fr"{LOG_FOLDER_PATH}\{LOG_FILE_NAME_RESULTS}")
             output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", results_data)
-            output_toml_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME + "_config", config)
+            output_toml_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME + "_config", self.config)
             if self.accuracy_percent is not None:
                 log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"accuracy %: {self.accuracy_percent}", False)
             if self.settling_time is not None:
@@ -304,7 +305,7 @@ class Simulation:
             if config['output']['separate_plots_display'] is False:
                 plt.close(fig_separate)
     
-    def create_pdf_combined(self, rows, results_data, config, LOG_FILE_NAME):
+    def create_pdf_combined(self, rows, cols, results_data, config, LOG_FILE_NAME):
         fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
 
         ax_as_np_array= np.array(ax)
@@ -329,11 +330,11 @@ class Simulation:
 
         plt.show()
 
-        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and test_mode_en is False:
+        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
 
             fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
 
-if __name__ == '__main__':
+def main():
     LOG_FILE_NAME, LOG_FOLDER_PATH, config = parse_args()
 
     results_data["time"] = []
@@ -354,7 +355,7 @@ if __name__ == '__main__':
     #-------------------------------------------------------------#
     ###################### Simulate System ########################
     if config['simulation']['enable']:
-        sol = simulation.simulate()
+            sol = simulation.simulate()
     else:
         exit()
     print("Simulation Complete")
@@ -388,5 +389,12 @@ if __name__ == '__main__':
         rows.append(('control_theta',my_utils.xyz_axes))
     
     simulation.create_pdf_separated(rows, results_data, config, LOG_FILE_NAME)
-    simulation.create_pdf_combined(rows, results_data, config, LOG_FILE_NAME)
+    simulation.create_pdf_combined(rows, cols, results_data, config, LOG_FILE_NAME)
+
+if __name__ == '__main__':
+    # if config['simulation']['profile']:
+    cProfile.run('main()', '../data_logs/profile_stats.prof')
+
+    # else:
+
 
