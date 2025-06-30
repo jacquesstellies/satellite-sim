@@ -47,6 +47,23 @@ def log_to_file(path, file_name, string, print_c=True):
 def interpolate_data(data, time_series, time_series_new):
     return np.interp(time_series_new, time_series, data)
 
+def create_default_log_file_name(config):
+    
+    filename = config['controller']['type']
+    
+    if(config['controller']['type'] != "q_feedback"):
+        filename += ('_' + config['controller']['sub_type'])
+    
+    filename += '_' + config['wheels']['config']
+    
+    if config['fault']['master_enable']:
+        filename += '_fault'
+    
+    if config['simulation']['iterations'] > 1:
+        filename += '_mc'
+
+    return filename
+
 def parse_args():
     parser = argparse.ArgumentParser(prog="rigid_body_simulation")
     parser.add_argument("-o", "--output_name", help="filename to log ouptut", type=str)
@@ -69,12 +86,7 @@ def parse_args():
         else:
             overide = config['output']['log_file_name_overide']
             if overide == "None" or overide == "":
-                LOG_FILE_NAME = config['controller']['type']
-                if(config['controller']['type'] != "q_feedback"):
-                    LOG_FILE_NAME += ('_' + config['controller']['sub_type'])
-                LOG_FILE_NAME += '_' + config['wheels']['config']
-                if config['fault']['master_enable']:
-                    LOG_FILE_NAME += '_fault'
+                LOG_FILE_NAME = create_default_log_file_name(config)
     else:
         LOG_FILE_NAME = args["output_name"]
 
@@ -110,7 +122,7 @@ class Simulation:
     sim_time_series = None
     sim_time = 0
     config = None
-
+    monte_carlo = False
     def __init__(self, config):
             #------------------------------------------------------------#
         ###################### Set Up Objects ########################
@@ -163,14 +175,12 @@ class Simulation:
         
         if config['simulation']['test_mode_en']:
             print("NB ********* Test Mode is ENABLED *********")
-
-        # return self.satellite
     
     def simulate(self):
-        # Integrate satellite dynamics over time
         sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
-                    t_eval=self.sim_time_series,
-                    max_step=0.1)
+                        t_eval=self.sim_time_series,
+                        max_step=0.1)
+        # Integrate satellite dynamics over time
         return sol
     
     def collect_results(self, sol):
@@ -230,11 +240,13 @@ class Simulation:
             control_energy_total += control_energy_per_axis[axis]
             results_data[f'control_energy_{axis}'] = control_energy_arr[i]
         self.control_energy_log_output = f"control energy (J): {my_utils.round_dict_values(control_energy_per_axis,3)} | total: {round(control_energy_total,3)}"
-        print(self.control_energy_log_output)
+        if self.monte_carlo == False:
+            print(self.control_energy_log_output)
 
     accuracy_percent = None
     settling_time = None
     steady_state = None
+    steady_state_euler_axis = None
 
     def calc_accuracy_output_results(self):
         try:
@@ -243,22 +255,37 @@ class Simulation:
             control_info = control.step_info(sysdata=results_data[f"euler_int"], 
                                             SettlingTimeThreshold=0.002, T=results_data['time'])
             self.steady_state = control_info['SteadyStateValue']
-            accuracy = 1-np.abs((results_data[f"euler_axis"][-1]-euler_axis_ref)/(euler_axis_ref-euler_axis_init))
-            self.settling_time = control_info['SettlingTime']
 
-            self.accuracy_percent = accuracy*100
+            control_info_euler_axis = control.step_info(sysdata=results_data['euler_axis'],SettlingTimeThreshold=0.002, T=results_data['time'])
+            
+            self.steady_state_euler_axis = control_info_euler_axis['SteadyStateValue']
+            print(f"steady state error euler angle about pricipal axis: {self.steady_state_euler_axis} deg")
+            self.accuracy = 1-np.abs((results_data[f"euler_axis"][-1]-euler_axis_ref)/(euler_axis_ref-euler_axis_init))
+            self.settling_time = control_info['SettlingTime']
+            
+            if self.settling_time >= (self.sim_time - 1):
+                self.accuracy = 0
+                self.settling_time = None
+                raise Exception("Settling time is greater than simulation time")
+
+            self.accuracy_percent = self.accuracy*100
             
             final_q = [results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
             final_euler  = Rotation.from_quat(final_q).as_euler('xyz', degrees=True)
-            print(f"accuracy %: {self.accuracy_percent}")
-            print(f"settling_time (s): {round(self.settling_time,3)}")
-            print(f"steady_state (s): {round(self.steady_state,3)}")
+            if self.monte_carlo == False:
+                print(f"accuracy %: {self.accuracy_percent}")
+                print(f"settling_time (s): {round(self.settling_time,3)}")
+                print(f"steady_state (s): {round(self.steady_state,3)}")
             # print(f"final euler: {final_euler} deg xyz")
             # print(f"euler error: {euler_axis_ref - final_euler} deg xyz")
 
             control_info_y = control.step_info(sysdata=results_data['euler_yaw'],SettlingTimeThreshold=0.002, T=results_data['time'])
             control_info_p = control.step_info(sysdata=results_data['euler_pitch'],SettlingTimeThreshold=0.002, T=results_data['time'])
             control_info_r = control.step_info(sysdata=results_data['euler_roll'],SettlingTimeThreshold=0.002, T=results_data['time'])
+            if self.monte_carlo == False:
+                print(f"accuracy %: {self.accuracy_percent}")
+                print(f"settling_time (s): {round(self.settling_time,3)}")
+                print(f"steady_state (s): {round(self.steady_state,3)}")
             print(f"steady state error: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
         except Exception as e:
             print(f"Error calculating accuracy: {e}")
@@ -278,7 +305,7 @@ class Simulation:
             log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, self.control_energy_log_output, False)
             log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"{self.steady_state}", False)
 
-    def create_pdf_separated(self, rows, results_data, config, LOG_FILE_NAME):
+    def create_plots_separated(self, rows, results_data, config, LOG_FILE_NAME):
             # Create separate figures if enabled in config
         for row in rows:
             row_name, axes, label = row
@@ -305,7 +332,7 @@ class Simulation:
             if config['output']['separate_plots_display'] is False:
                 plt.close(fig_separate)
     
-    def create_pdf_combined(self, rows, cols, results_data, config, LOG_FILE_NAME):
+    def create_plots_combined(self, rows, cols, results_data, config, LOG_FILE_NAME, type='line', x_axis=None):
         fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
 
         ax_as_np_array= np.array(ax)
@@ -319,7 +346,12 @@ class Simulation:
                 else: 
                     axis = None
                     name = row_name
-                current_plot.plot(results_data['time'], results_data[name], label=axis)
+                if type == 'line':
+                    current_plot.plot(results_data['time'], results_data[name], label=axis)
+                elif type == 'scatter':
+                    if x_axis is None:
+                        raise Exception("x_axis must be provided for scatter plot")
+                    current_plot.scatter(x_axis, results_data[name], label=axis)
 
             current_plot.set_xlabel('time (s)')
             current_plot.set_ylabel(label)
@@ -333,6 +365,40 @@ class Simulation:
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
 
             fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
+
+# class MonteCarloSimulation(Simulation):
+def generate_rand_rot():
+    """Generate a 3D random rotation matrix.
+
+    Returns:
+        np.matrix: A 3D rotation matrix.
+
+    """
+    x1, x2, x3 = np.random.rand(3)
+    R = np.matrix([[np.cos(2 * np.pi * x1), np.sin(2 * np.pi * x1), 0],
+                [-np.sin(2 * np.pi * x1), np.cos(2 * np.pi * x1), 0],
+                [0, 0, 1]])
+    v = np.matrix([[np.cos(2 * np.pi * x2) * np.sqrt(x3)],
+                [np.sin(2 * np.pi * x2) * np.sqrt(x3)],
+                [np.sqrt(1 - x3)]])
+    H = np.eye(3) - 2 * v * v.T
+    M = -H * R
+    return M
+
+def generate_rand_quat() -> np.quaternion:
+    """Generate a random quaternion.
+
+    Returns:
+        np.quaternion: A random quaternion.
+
+    """
+    x1, x2, x3 = np.random.rand(3)
+    q = np.quaternion(np.sqrt(1 - x3) * np.cos(2 * np.pi * x1),
+                    np.sqrt(1 - x3) * np.sin(2 * np.pi * x1),
+                    np.sqrt(x3) * np.cos(2 * np.pi * x2),
+                    np.sqrt(x3) * np.sin(2 * np.pi * x2))
+    q = q.normalized()
+    return q
 
 def main():
     LOG_FILE_NAME, LOG_FOLDER_PATH, config = parse_args()
@@ -352,47 +418,119 @@ def main():
     controller = satellite._controller
     test_mode_en = config['simulation']['test_mode_en']
 
-    #-------------------------------------------------------------#
-    ###################### Simulate System ########################
+    sim_iter = config['simulation']['iterations']
+    
     if config['simulation']['enable']:
+        print(f"Running simulation")
+        #-------------------------------------------------------------#
+        ###################### Simulate System ########################
+        if sim_iter == 1:    
             sol = simulation.simulate()
-    else:
-        exit()
-    print("Simulation Complete")
+            print("Simulation Complete")
+            simulation.collect_results(sol)
 
-    #-------------------------------------------------------------#
-    ###################### Collect Results ########################
-    collect_results = simulation.collect_results(sol)
+            simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 
-    simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
+            cols = 2
+            rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular rate (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
+                    ('torque',my_utils.xyz_axes, 'Torque (N)'), ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')]
+            
+            ## Row should be in the form of (row_name, [axes], label)
+            # rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular rate (rad/s)'), 
+            #         ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), 
+            #         ('euler_int',['none'], 'Euler integral (deg)'), 
+            #         ]
+            
+            if satellite.wheels_control_enable:
+                # rows.append(('wheel_speed', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
+                rows.append(('wheel_torque', [str(wheel.index) for wheel in wheel_module.wheels], 'Control Torque (N)'))
 
-    cols = 2
-    # rows = [ ('angular_rate',my_utils.xyz_axes), ('quaternion',my_utils.q_axes), ('euler_int',['none']), ('euler', ['yaw','pitch', 'roll']), \
-    #         ('torque',my_utils.xyz_axes), ('control_energy',my_utils.xyz_axes), ('T_dist', my_utils.xyz_axes)]
-    # rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular rate (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
-    #         ('torque',my_utils.xyz_axe, 'Torque (N)'), ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')]
-    
-    ## Row should be in the form of (row_name, [axes], label)
-    rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular rate (rad/s)'), 
-            ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), 
-            ('euler_int',['none'], 'Euler integral (deg)'), 
-            ]
-    
-    if satellite.wheels_control_enable:
-        # rows.append(('wheel_speed', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
-        rows.append(('wheel_torque', [str(wheel.index) for wheel in wheel_module.wheels], 'Control Torque (N)'))
+            if controller.type == "adaptive":
+                rows.append(('control_adaptive_model_output',['none']))
+                rows.append(('control_theta',my_utils.xyz_axes))
+            
+            simulation.create_plots_separated(rows, results_data, config, LOG_FILE_NAME)
+            simulation.create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME)
+
+        #-------------------------------------------------------------#
+        ###################### Monte Carlo ############################
+        elif sim_iter > 1:
+            print(f"Running Monte Carlo simulation with {sim_iter} iterations")
+            def test_q_init(q_init, results=None):
+
+                results['accuracy'] = []
+                results['settling_time'] = []
+                results['euler_axis_final'] = []
+                results['euler_axis_init'] = []
+                results['euler_angles_y_init'] = []
+                results['euler_angles_p_init'] = []
+                results['euler_angles_r_init'] = []
+                
+                for i in range(sim_iter):
+                    print(f"Simulation Iteration {i+1} of {sim_iter}")
+                    simulation.satellite.dir_init = Rotation.from_quat(q_init.as_float_array(), scalar_first=True)
+                    sol = simulation.simulate()
+                    simulation.collect_results(sol)
+                    results['accuracy'].append(simulation.accuracy)
+                    results['settling_time'].append(simulation.settling_time)
+                    # results['euler_axis_final'].append(results_data['euler_axis'][-1])
+                    results['euler_axis_final'].append(simulation.steady_state_euler_axis)
+                    
+
+                rows = [('accuracy', 'none', 'Accuracy'), ('settling_time', 'none', 'Settling Time')]
+                simulation.create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME, type='scatter', x_axis=[monte_carlo_results['euler_axis_final']])
+                # simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
+                if simulation.accuracy > 0:
+                    passed = True
+                else:
+                    passed = False
+                return passed
+
+            def plot_q(passed):
+                fig = plt.figure()
+                ax = fig.add_subplot(111, projection='3d')
+                ax.set_xlabel('X')
+                ax.set_ylabel('Y')
+                ax.set_zlabel('Z')
+                ax.set_title('Random Quaternion')
+                # for i in range(sim_iter):
+                q_init = generate_rand_quat()
+                q_init = np.quaternion(q_init.w,q_init.x,q_init.y,q_init.z)
+                # test_q_init(q_init)
+                if passed:
+                    colour = 'g'
+                else:
+                    colour = 'r'
+                ax.scatter(q_init.x, q_init.y, q_init.z, label=f"Iteration {i+1}", marker='o', facecolors='none', edgecolors=colour)
+            
+                # Make data
+                # u = np.linspace(0, 2 * np.pi, 100)
+                # v = np.linspace(0, np.pi, 100)
+                # x = np.outer(np.cos(u), np.sin(v))
+                # y = np.outer(np.sin(u), np.sin(v))
+                # z = np.outer(np.ones(np.size(u)), np.cos(v))
+                # ax.plot_surface(x, y, z, color='r', alpha=0.1)
+                plt.show()
+            # plot_q()
+            # exit()
+            # quats = []
+            monte_carlo_results = dict()
+            for i in range(sim_iter):
+                q_init = generate_rand_quat()
+                print(q_init)
+                # quats.append(q_init)
+                passed = test_q_init(q_init, results=monte_carlo_results)
+                
+            
+            
 
 
-
-    if controller.type == "adaptive":
-        rows.append(('control_adaptive_model_output',['none']))
-        rows.append(('control_theta',my_utils.xyz_axes))
-    
-    simulation.create_pdf_separated(rows, results_data, config, LOG_FILE_NAME)
-    simulation.create_pdf_combined(rows, cols, results_data, config, LOG_FILE_NAME)
+            print("Simulation Complete")
+        else:
+            raise Exception("Invalid simulation iteration count")
 
 if __name__ == '__main__':
-    # if config['simulation']['profile']:
+
     cProfile.run('main()', '../data_logs/profile_stats.prof')
 
     # else:

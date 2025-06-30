@@ -1,5 +1,14 @@
 debug_log = false
 
+[simulation]
+enable = true
+duration = 300
+resolution = 0.1
+test_mode_en = false
+test_duration = 10
+test_resolution = 1
+iterations = 2
+
 [controller]
 enable = true
 c = [ 10, 10, 10,]
@@ -10,7 +19,7 @@ T_max = 0.2
 T_min = 0
 filter_coef = 0
 time_step = 0.1
-type = "backstepping"
+type = "backstepping" # q_feedback, backstepping, adaptive
 sub_type = "Shen"
 adaptive_gain = 0.1
 
@@ -30,6 +39,7 @@ torque_limit = 0.5
 filter_coef = 0.99
 wheel_num = 0
 mul_fault = [ 0.0, 1.0, 1.0, 1.0,]
+# mul_fault = [ 0.6, 1.0, 1.0,]
 add_fault = [ 0, 0, 0, 0,]
 time = 0
 master_enable = true
@@ -37,7 +47,7 @@ update_rate = 0.5
 
 [satellite]
 euler_init_en = true
-euler_init = [ 120, 0, 0,]
+euler_init = [ 180, 0, 0,]
 q_init = [ -0.5, 0.3, 0.4, 0.7071,]
 mode = "direction"
 ref_T = [ 0, 1, 0,]
@@ -50,20 +60,12 @@ mass = 12
 M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
 inertia_override = true
 
-[simulation]
-enable = true
-duration = 300
-resolution = 0.1
-test_mode_en = false
-test_duration = 10
-test_resolution = 1
-
 [output]
 accuracy_enable = true
 energy_enable = true
 log_enable = true
-append_date = true
-pdf_output_enable = true
+append_date = false
+pdf_output_enable = false
 log_file_name_overide = "None"
 separate_plots_display = false
 

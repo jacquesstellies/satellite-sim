@@ -65,7 +65,6 @@ class Satellite(Body):
                 self.M_inertia = np.diag(M_inertia)
             else:
                 raise Exception("inertia override must be 3x3 or 3x1 matrix")
-            print("Satellite inertia ",self.M_inertia)
             self.calc_M_inertia_inv()
         else:
             self.calc_M_inertia()
