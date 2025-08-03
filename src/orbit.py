@@ -46,12 +46,12 @@ class Disturbances():
         
     def calc_aero_torque(self, satellite, q):
         aero_angle = np.pi - np.arctan(10)
-        angular_v_earth = 7.272e-5
+        w_earth = 7.272e-5
 
         rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
         dcm = rotation_obj.as_matrix()
-        va_b = dcm@[-self.orbit.v + angular_v_earth*self.orbit.radius*cos(self.orbit.latitude*cos(aero_angle)),
-                -angular_v_earth*self.orbit.radius*cos(self.orbit.latitude)*sin(aero_angle),
+        va_b = dcm@[-self.orbit.v + w_earth*self.orbit.radius*cos(self.orbit.latitude*cos(aero_angle)),
+                -w_earth*self.orbit.radius*cos(self.orbit.latitude)*sin(aero_angle),
                 0]
         density_0 = 1.585e-12
         density = density_0*np.exp(-(self.orbit.altitude-450e3)/60.828e3)

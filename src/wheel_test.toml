@@ -1,0 +1,31 @@
+[wheels]
+config = "custom"
+mass = 0.31
+radius = 0.066
+height = 0.025
+max_speed_rpm = 10000
+max_torque = 0.2
+num_wheels = 4
+D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
+friction_coef = 0.025
+
+[fault]
+wheel_num = 0
+mul_fault = [ 0.1, 1.0, 1.0, 1.0,]
+add_fault = [ 0, 0, 0, 0,]
+time = 10
+master_enable = true
+update_rate = 0.5
+
+[controller]
+t_sample = 0.1
+gain_obs = [ 3.0, 0.003, 0.0002 ] # k_w, k_f, k_fd
+# gain_obs = [ 1e9, 4.0 ] # k_w, k_f
+
+[simulation]
+duration = 50
+input_torque = 0.1  # Constant torque input
+test_mode_en = false
+
+[output]
+pdf_output_enable = true

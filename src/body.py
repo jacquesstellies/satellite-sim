@@ -1,6 +1,6 @@
 import numpy as np
-
-class Body:
+from state_provider import StateProvider
+class Body(StateProvider):
 
     mass = 0
     dimensions = {'x':0, 'y':0, 'z':0} # x, y and z dimensions

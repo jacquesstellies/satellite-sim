@@ -134,10 +134,10 @@ class Simulation:
             dir_init = Rotation.from_euler('xyz',config['satellite']['euler_init'],degrees=True)
         else:
             dir_init = Rotation.from_quat(config['satellite']['q_init'])
-        satellite_angular_v_init = np.array([0,0,0])
+        w_sat_init = np.array([0,0,0])
 
 
-        controller = Controller(fault=fault,angular_v_init=np.zeros(3),quaternion_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
+        controller = Controller(fault=fault,w_init=np.zeros(3),q_sat_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
                                     config=config)
 
         self.satellite = Satellite(wheel_module, controller, fault, config=config)
@@ -157,13 +157,10 @@ class Simulation:
         else:
             raise(Exception("no reference angle commanded"))
 
-        quaternion_init = self.satellite.dir_init.as_quat()
-        control_torque_init = [0, 0, 0]
-        self.initial_values = [satellite_angular_v_init, quaternion_init, control_torque_init]
-        # if self.satellite.wheels_control_enable is True:
-        #     self.initial_values.append(np.zeros(3))
-
-        self.initial_values = np.hstack(self.initial_values)
+        q_sat_init = self.satellite.dir_init.as_quat()
+        control_torque_init = np.zeros(3)
+        w_wheels_init = np.zeros((self.satellite._wheel_module.num_wheels))
+        self.initial_values = np.concatenate([w_sat_init, q_sat_init, w_wheels_init, control_torque_init])
 
         # Simulation parameters
         sim_config = config['simulation']
@@ -185,6 +182,15 @@ class Simulation:
     
     def collect_results(self, sol):
 
+        for i,axis in enumerate(my_utils.xyz_axes):
+            results_data[f'angular_rate_{axis}'] = interpolate_data(sol.y[i], sol.t, self.sim_time_series)
+
+        for i,axis in enumerate(my_utils.q_axes):
+            results_data[f'quaternion_{axis}'] = interpolate_data(sol.y[i+3], sol.t, self.sim_time_series)
+        
+        for i,axis in enumerate(my_utils.xyz_axes):
+            results_data[f'control_energy_{axis}'] = interpolate_data(sol.y[i+7], sol.t, self.sim_time_series)
+
         # Put results into data object
         for key, value in results_data.items():
             if key == 'time':
@@ -199,13 +205,10 @@ class Simulation:
                         print(f"Error interpolating {key} {value}")
         
         results_data['time'] = self.sim_time_series
-
-        for i,axis in enumerate(my_utils.xyz_axes):
-            results_data[f'angular_rate_{axis}'] = sol.y[i]
-
-        for i,axis in enumerate(my_utils.q_axes):
-            results_data[f'quaternion_{axis}'] = sol.y[i+3]
+        results_data['control_time'] = self.sim_time_series
         
+        print(f"quaternion_x size {len(results_data['quaternion_x'])}")
+        print(f"time size {len(results_data['time'])}")
         results_data['euler_axis'] = []
         for row in range(len(results_data['time'])):
             r_1 : Rotation = Rotation.from_quat([results_data['quaternion_x'][row],
@@ -223,22 +226,21 @@ class Simulation:
                                             results_data["quaternion_w"]])
         r =  Rotation.from_quat(quat=q.T)
         [results_data['euler_yaw'],results_data['euler_pitch'], results_data['euler_roll']] = r.as_euler('zyx', degrees=True).T
-
-        if self.config['output']['energy_enable']:
-            self.calc_control_energy_output_results(sol)
+        
+        for i,axis in enumerate(my_utils.xyz_axes):
+            if self.config['output']['energy_enable']:
+                self.calc_control_energy_output_results(results_data['control_energy_{}'.format(axis)])
         
         if self.config['output']['accuracy_enable']:
             self.calc_accuracy_output_results()
     
     control_energy_log_output = ""
-    def calc_control_energy_output_results(self, sol):
-        control_energy_arr = sol.y[7:]
+    def calc_control_energy_output_results(self, control_energy_arr):
         control_energy_per_axis = {}
         control_energy_total = 0
         for i,axis in enumerate(my_utils.xyz_axes):
             control_energy_per_axis[axis] = np.sum(np.abs(control_energy_arr[i]))
             control_energy_total += control_energy_per_axis[axis]
-            results_data[f'control_energy_{axis}'] = control_energy_arr[i]
         self.control_energy_log_output = f"control energy (J): {my_utils.round_dict_values(control_energy_per_axis,3)} | total: {round(control_energy_total,3)}"
         if self.monte_carlo == False:
             print(self.control_energy_log_output)
@@ -432,7 +434,7 @@ def main():
             simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 
             cols = 2
-            rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular rate (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
+            rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular velocity (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
                     ('torque',my_utils.xyz_axes, 'Torque (N)'), ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')]
             
             ## Row should be in the form of (row_name, [axes], label)
@@ -533,6 +535,5 @@ if __name__ == '__main__':
 
     cProfile.run('main()', '../data_logs/profile_stats.prof')
 
-    # else:
 
 
