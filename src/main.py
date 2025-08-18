@@ -107,7 +107,7 @@ def parse_args():
     if args['append'] is not None:
         LOG_FILE_NAME += f"_{args['append']}"
 
-    LOG_FOLDER_BASE_PATH = fr'..\data_logs'
+    LOG_FOLDER_BASE_PATH = os.path.abspath(r'../data_logs')
     LOG_FOLDER_PATH = os.path.join(LOG_FOLDER_BASE_PATH,LOG_FILE_NAME)
     if not os.path.exists(LOG_FOLDER_BASE_PATH) and LOG_FILE_NAME != None:
         raise Exception(f"Log folder {LOG_FOLDER_BASE_PATH} does not exist")

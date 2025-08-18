@@ -1,6 +1,6 @@
 control==0.10.0
 matplotlib==3.8.2
-numpy==2.3.2
+numpy
 numpy_quaternion==2024.0.8
 pandas==2.3.1
 pytest==8.1.1

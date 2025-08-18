@@ -8,7 +8,7 @@ test_mode_en = false
 test_duration = 10
 test_resolution = 1
 iterations = 1
-tuning = true
+tuning = false
 
 [controller]
 enable = true
