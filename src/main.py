@@ -391,8 +391,11 @@ class Simulation:
                 current_plot.legend()
 
             plt.subplots_adjust(wspace=0.5, hspace=0.5)
-
-        plt.show()
+        if config['output']['show_plots'] is True:
+            try:
+                plt.show()
+            except Exception as e:
+                print(f"Error showing plots: {e}")
 
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
 
@@ -638,7 +641,11 @@ def main():
                     # y = np.outer(np.sin(u), np.sin(v))
                     # z = np.outer(np.ones(np.size(u)), np.cos(v))
                     # ax.plot_surface(x, y, z, color='r', alpha=0.1)
-                    plt.show()
+                    if config['output']['show_plots'] is True:
+                        try:
+                            plt.show()
+                        except Exception as e:
+                            print(f"Error showing plots: {e}")
                 # plot_q()
                 # exit()
                 # quats = []
