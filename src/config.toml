@@ -8,6 +8,7 @@ test_mode_en = false
 test_duration = 10
 test_resolution = 1
 iterations = 1
+tuning = true
 
 [controller]
 enable = true
@@ -22,6 +23,18 @@ t_sample = 0.1
 type = "q_feedback" # q_feedback, backstepping, adaptive
 sub_type = "Shen"
 adaptive_gain = 0.1
+observer_enable = false
+gain_obs = [ 3.0, 0.003, 0.0002 ]
+
+[backstepping]
+alpha = 0.1
+beta = 1.8
+k = 0.1
+eta_1 = 0.001
+upsilon = 0.1
+c_1 = 0.01
+c_2 = 0.1
+
 
 [wheels]
 config = "custom"
@@ -47,7 +60,7 @@ update_rate = 0.5
 
 [satellite]
 euler_init_en = true
-euler_init = [ 180, 0, 0,]
+euler_init = [ 45, 0, 0,]
 q_init = [ -0.5, 0.3, 0.4, 0.7071,]
 use_ref_euler = false
 ref_euler = [ 0, 0, 5,]

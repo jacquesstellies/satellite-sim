@@ -57,11 +57,6 @@ class WheelExtendedStateObserver():
         k_f = self.gain[1]
         k_fd = self.gain[2] if len(self.gain) > 2 else 0
 
-        # dx_est = (self.F @ x_est).flatten() + self.g.flatten() * u[0] + np.array([k_w * e, k_f * e])
-
-        # dw_est = dx_est[0]
-        # df_est = dx_est[1]
-
         # dx_est = (self.A @ x_est).flatten() + self.b.flatten() * u[0] + np.array([k_w * e, k_f * e])
 
         # dw_est = dx_est[0]

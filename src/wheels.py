@@ -81,8 +81,22 @@ class Wheel():
             
         # Calculate the new wheel speed derivative
         dw = (T_c - self.friction_coef*w)*self.M_inertia_inv[2][2]
-        
-        return [dw, w]
+
+        return self.calc_sensor_output([dw, w])
+
+    def calc_sensor_output(self, state):
+        # Set a target channel noise power to something very noisy
+        target_noise_db = 10
+
+        # Convert to linear Watt units
+        target_noise_watts = 10 ** (target_noise_db / 10)
+
+        # Generate noise samples
+        mean_noise = 0
+        noise = np.random.normal(mean_noise, np.sqrt(target_noise_watts), len(state))
+
+        return state + noise
+
     
     def calc_state_outputs(self, t, state):
         dw = state[0]
@@ -131,8 +145,6 @@ class WheelModule():
         for i, wheel in enumerate(self.wheels):
             wheel.w_max = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
             wheel.T_max = config['wheels']['max_torque']
-            my_globals.results_data['wheel_speed_' + str(i)] = []
-            my_globals.results_data['wheel_torque_' + str(i)] = []
             wheel.d = np.transpose(self.D)[i]
 
         self.D_psuedo_inv = np.linalg.pinv(self.D)

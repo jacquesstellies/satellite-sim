@@ -76,7 +76,7 @@ def wheel_simulate(t, y, u, wheel):
 
     return y
 
-def test_wheel_torque_control(config):
+def test_wheel_step_response(config):
     fault = Fault(config)
     wheel = Wheel(config=config, fault=fault)
     duration = 20  # Simulation duration in seconds
@@ -97,6 +97,9 @@ def test_wheel_torque_control(config):
         max_step=t_sample,
         # t_eval=np.linspace(0, duration, int(duration/t_sample)), dense_output=True
     )
+
+# def test_wheel_impulse_response(config):
+
 
 def test_wheel_extended_state_observer(config):
     fault = Fault(config)
@@ -212,9 +215,11 @@ def plot_results_obs():
 
 if __name__ == "__main__":
     config = toml.load('wheel_test.toml')
-    # test_wheel_torque_control(config)
+    # test_wheel_step_response(config)
     # plot_results()
 
+    # test_wheel_impulse_response(config)
+    # plot_results
     # test_wheel_observer(config)
     # plot_results_obs()
 
