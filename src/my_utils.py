@@ -63,13 +63,18 @@ def conv_rads_per_sec_to_rpm(value):
 def low_pass_filter(value, value_prev, coeff):
     return (coeff)*value_prev + (1 - coeff)*value
 
+def cross_product(a, b):
+    return np.array([a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]])
+
+def _sign(x: float) -> int:
+    return 1 if x >= 0 else -1
 #! @brief Create a combined plot with multiple rows and columns
 # @param rows: List of tuples, each containing (row_name, [axes], label)
 # @param cols: Number of columns in the plot
 # @param results_data: Dictionary containing data to plot
 def create_plots_combined(rows, cols, results_data, config=None, LOG_FILE_NAME=None, type='line', x_axis=None):
-    if os.path.exists(fr"..\data_logs\{LOG_FILE_NAME}") is False:
-        os.mkdir(fr"..\data_logs\{LOG_FILE_NAME}")
+    if os.path.exists(fr"../data_logs/{LOG_FILE_NAME}") is False:
+        os.mkdir(fr"../data_logs/{LOG_FILE_NAME}")
 
     fig, ax = plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
 
@@ -108,7 +113,7 @@ def create_plots_combined(rows, cols, results_data, config=None, LOG_FILE_NAME=N
     plt.show()
     if config is not None:
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-            fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
+            fig.savefig(fr"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
 
 def create_plots_separated(rows, results_data, config=None, display=False, LOG_FILE_NAME=None):
 
@@ -137,10 +142,10 @@ def create_plots_separated(rows, results_data, config=None, display=False, LOG_F
             plt.show()
 
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-            if os.path.exists(fr"..\data_logs\{LOG_FILE_NAME}") is False:
-                os.mkdir(fr"..\data_logs\{LOG_FILE_NAME}")
-            if not os.path.exists(fr"..\data_logs\{LOG_FILE_NAME}\graphs"):
-                os.mkdir(fr"..\data_logs\{LOG_FILE_NAME}\graphs")
-            fig_separate.savefig(fr"..\data_logs\{LOG_FILE_NAME}\graphs\{LOG_FILE_NAME}_{row_name}.pdf", bbox_inches='tight')
+            if os.path.exists(fr"../data_logs/{LOG_FILE_NAME}") is False:
+                os.mkdir(fr"../data_logs/{LOG_FILE_NAME}")
+            if not os.path.exists(fr"../data_logs/{LOG_FILE_NAME}/graphs"):
+                os.mkdir(fr"../data_logs/{LOG_FILE_NAME}/graphs")
+            fig_separate.savefig(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}.pdf", bbox_inches='tight')
         if display is False:
             plt.close(fig_separate)

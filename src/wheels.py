@@ -12,11 +12,13 @@ class Wheel():
     mass = 0
     M_inertia = np.zeros((3,3))
     M_inertia_inv = np.zeros((3,3))
+    M_inertia_fast : float = 0
+    M_inertia_inv_fast : float = 0
 
     dimensions = {'radius': 0, 'height': 0}
     position = np.zeros(3)
     d = np.zeros(3) # direction vector
-    friction_coef = 0.0001
+    friction_coef = 0.0
     config = None
     index = 0
 
@@ -27,6 +29,8 @@ class Wheel():
     controller_enable = True
     t_sample = None
 
+    _noise_std = 0
+
     def __init__(self, config, fault, index=0):
         self.config = config
         self.mass = self.config['wheels']['mass']
@@ -36,8 +40,17 @@ class Wheel():
         self.T_max = self.config['wheels']['max_torque']
         self._fault = fault
         self.index = index
-        # self.t_sample = self.config['wheels']['t_sample']
+        self.t_sample = self.config['controller']['t_sample']
+        self.friction_coef = self.config['wheels']['friction_coef']
+        print("Initializing wheel with friction coef:", self.friction_coef)
         self.calc_M_inertia()
+
+        # print(f"Wheel {self.index} inertia:\n", self.M_inertia_fast)
+        print(f"Wheel {self.index} inertia inv:", self.M_inertia_inv_fast)
+
+        target_noise_db = 10
+        target_noise_watts = 10 ** (target_noise_db / 10)
+        self._noise_std = math.sqrt(target_noise_watts)
     
     def calc_M_inertia(self):
         # Moment of inertia
@@ -46,6 +59,8 @@ class Wheel():
         self.M_inertia[2][2] = 0.5*self.mass*pow(self.dimensions['radius'],2)
 
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
+        self.M_inertia_fast = self.M_inertia[2][2]  # For fast calculations, we only need the z-axis inertia
+        self.M_inertia_inv_fast = self.M_inertia_inv[2][2]  # For fast calculations, we only need the z-axis inertia
     # def controller_output(self, t, state, u):
     #     kp = 1.0
     #     w_i = state[0]
@@ -53,57 +68,63 @@ class Wheel():
     #     w_result = w_i
 
     def calc_state_rates(self, t, state, u):
-        
-        T_c = u
         w = state[0]
 
-        self._fault.update(t)
         # Check wheel speed limit exceeded
-        if np.abs(w) >= self.w_max:
-            # print(f"Wheel {self.index} speed limit exceeded: {w} > {self.w_max}")
-            w = self.w_max*np.sign(w)
-            dw = 0
-            return [dw, w]
-         
+        if abs(w) >= self.w_max:
+            w = self.w_max*my_utils._sign(w)
+            if u != 0:
+                u = 0
+                dw = 0
+                return np.array([dw,w])
+
         # Set fault torque limit
         T_limit = self.T_max
-        # if self._fault.enabled:
-        #     T_limit = self._fault.torque_limit_mul * self.T_max
-        #     if T_limit > self.T_max:
-        #         raise(Exception(f"Fault torque limit {T_limit} exceeds max torque {self.T_max}"))
     
         # Check torque limit exceeded
-        if np.abs(T_c) > T_limit:
-            T_c = T_limit*np.sign(T_c)
+        if abs(u) >= T_limit:
+            print("Wheel torque input saturated at:", u)
+            u = T_limit*my_utils._sign(u)
 
-        if self._fault.enabled:
-            T_c = self._fault.torque_limit_mul * T_c
+        # Apply fault if enabled (self updated in fault class)
+        u = self._fault.E[self.index][self.index] * u
             
         # Calculate the new wheel speed derivative
-        dw = (T_c - self.friction_coef*w)*self.M_inertia_inv[2][2]
+        dw = (u - self.friction_coef*w)*self.M_inertia_inv_fast
+        # return self.calc_sensor_output(np.array([dw,w]))
+        return np.array([dw,w])
 
-        return self.calc_sensor_output([dw, w])
-
-    def calc_sensor_output(self, state):
-        # Set a target channel noise power to something very noisy
-        target_noise_db = 10
-
-        # Convert to linear Watt units
-        target_noise_watts = 10 ** (target_noise_db / 10)
-
-        # Generate noise samples
-        mean_noise = 0
-        noise = np.random.normal(mean_noise, np.sqrt(target_noise_watts), len(state))
-
+    def calc_sensor_output(self, state: np.array):
+        # noise = np.random.normal(0, self._noise_std, size=state.shape)
+        noise = np.random.normal(0, self._noise_std, size=len(state))
         return state + noise
 
     
     def calc_state_outputs(self, t, state):
         dw = state[0]
         w = state[1]
-        H = w*self.M_inertia[2][2]
-        dH = dw*self.M_inertia[2][2] + self.friction_coef*w
-        return [dH, H]
+        H = w*self.M_inertia_fast
+        dH = dw*self.M_inertia_fast
+        return np.array([dH, H])
+
+    e_prev = 0
+    def calc_state_speed_control(self, t, state, w_ref):
+        w = state[0]
+        kp = self.config['controller']['kp_wheel_w']
+        kd = self.config['controller']['kd_wheel_w']
+        ki = self.config['controller']['ki_wheel_w']
+        # print(f"w_ref = {w_ref}")
+        # print(f"w = {w}")
+        # print(f"kp = {kp}")
+        # print(f"kd = {kd}")
+        e = w_ref - w
+        de = (e - self.e_prev)/self.t_sample
+        e_int = e+self.e_prev*self.t_sample
+        u = (kp*e + kd*de + ki*e_int)*self.M_inertia_fast
+
+        self.e_prev = e
+        state = self.calc_state_rates(t, state, u)
+        return state, u
 
 class WheelModule():
     wheels = None
@@ -111,6 +132,7 @@ class WheelModule():
     config = None
     D = None
     D_psuedo_inv = None
+    _D_psuedo_inv_local = None
     num_wheels = 0
     
     def __init__(self, config,fault=None):
@@ -147,34 +169,40 @@ class WheelModule():
             wheel.T_max = config['wheels']['max_torque']
             wheel.d = np.transpose(self.D)[i]
 
-        self.D_psuedo_inv = np.linalg.pinv(self.D)
+        # self.D_psuedo_inv = np.linalg.pinv(self.D)
+        if self.D.shape[1] != 3:
+            self.D_psuedo_inv = np.linalg.pinv(self.D)
+        else:
+            self.D_psuedo_inv = np.linalg.inv(self.D)
+
+        self._D_psuedo_inv_local = self.D_psuedo_inv
+
+        if config['controller']['type'] == "backstepping" and config['controller']['sub_type'] == "Shen":
+            self._D_psuedo_inv_local = np.eye(self.num_wheels)
+
 
     def calc_state_rates(self, t, state, u : np.array):
-        dw = state[:self.num_wheels]
-        w = state[self.num_wheels:]
-        if len(u) == self.D.shape[1]:
-           T_c = u
-        elif len(u) == 3:
-            T_c = self.D_psuedo_inv@u
-        else:
-            raise(Exception(f"invalid control input shape: {u.shape}"))
-        dw_wheels = np.zeros(self.num_wheels)
-        w_wheels = np.zeros(self.num_wheels)
+        # dw = state[:self.num_wheels]
+        # w = state[self.num_wheels:]
+
+        T_c = self._D_psuedo_inv_local@u
         for wheel in self.wheels:
-            [dw_wheel, w_wheel] = wheel.calc_state_rates(t, [dw[wheel.index],w[wheel.index]], T_c[wheel.index])
-            dw_wheels[wheel.index] = dw_wheel
-            w_wheels[wheel.index] = w_wheel
-        return np.concatenate([dw_wheels, w_wheels])
+            [dw_wheel, w_wheel] = wheel.calc_state_rates(t, [state[wheel.index],state[wheel.index + self.num_wheels]], T_c[wheel.index])
+            state[wheel.index] = dw_wheel
+            state[wheel.index + self.num_wheels] = w_wheel
+        return state
     
+    # calc_state_rates_optmized
+
     def calc_state_outputs(self, t, state):
         dw_wheels = state[:self.num_wheels]
         w_wheels = state[self.num_wheels:]
         dH_module = np.zeros(3)
         H_module = np.zeros(3)
         for wheel in self.wheels:
-            y = wheel.calc_state_outputs(t, [w_wheels[wheel.index], dw_wheels[wheel.index]])
-            dH_wheels = np.zeros(self.num_wheels)
-            H_wheels = np.zeros(self.num_wheels)
+            y = wheel.calc_state_outputs(t, [dw_wheels[wheel.index], w_wheels[wheel.index]])
+            # dH_wheels = np.zeros(self.num_wheels)
+            # H_wheels = np.zeros(self.num_wheels)
             dH_module += y[0]*wheel.d 
             H_module += y[1]*wheel.d
         # return np.concatenate([dH_module, H_module, dH_wheels, H_wheels])

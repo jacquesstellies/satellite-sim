@@ -7,25 +7,31 @@ max_speed_rpm = 10000
 max_torque = 0.2
 num_wheels = 4
 D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
-friction_coef = 0.025
+friction_coef = 0.0001
 
 [fault]
 wheel_num = 0
-mul_fault = [ 0.1, 1.0, 1.0, 1.0,]
+mul_fault = [ 0.5, 1.0, 1.0, 1.0,]
 add_fault = [ 0, 0, 0, 0,]
-time = 10
+time = 0
 master_enable = true
 update_rate = 0.5
 
 [controller]
 t_sample = 0.1
-gain_obs = [ 3.0, 0.003, 0.0002 ] # k_w, k_f, k_fd
-# gain_obs = [ 1e9, 4.0 ] # k_w, k_f
+kp_wheel_w = 3
+kd_wheel_w = 0
+ki_wheel_w = 1
+
+[observer]
+t_sample = 0.01
+gain = [ 3.0, 0.005, 0.00001, 0.0, 0.00 ] # k_w, k_f, k_fd, k_wd, k_wi
 
 [simulation]
-duration = 50
-input_torque = 0.1  # Constant torque input
+duration = 30
+input_torque = 0.2  # Constant torque input
 test_mode_en = false
+w_ref_rpm = 4000  # Constant wheel speed reference
 
 [output]
 pdf_output_enable = true
