@@ -11,7 +11,7 @@ friction_coef = 0.0001
 
 [fault]
 wheel_num = 0
-mul_fault = [ 0.5, 1.0, 1.0, 1.0,]
+mul_fault = [ 0.0, 1.0, 1.0, 1.0,]
 add_fault = [ 0, 0, 0, 0,]
 time = 0
 master_enable = true
@@ -31,7 +31,7 @@ gain = [ 3.0, 0.005, 0.00001, 0.0, 0.00 ] # k_w, k_f, k_fd, k_wd, k_wi
 duration = 30
 input_torque = 0.2  # Constant torque input
 test_mode_en = false
-w_ref_rpm = 4000  # Constant wheel speed reference
+w_ref_rpm = 2000  # Constant wheel speed reference
 
 [output]
 pdf_output_enable = true

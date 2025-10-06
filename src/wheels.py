@@ -61,11 +61,7 @@ class Wheel():
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
         self.M_inertia_fast = self.M_inertia[2][2]  # For fast calculations, we only need the z-axis inertia
         self.M_inertia_inv_fast = self.M_inertia_inv[2][2]  # For fast calculations, we only need the z-axis inertia
-    # def controller_output(self, t, state, u):
-    #     kp = 1.0
-    #     w_i = state[0]
-    #     w_delta = u/self.M_inertia[2][2]
-    #     w_result = w_i
+
 
     def calc_state_rates(self, t, state, u):
         w = state[0]
@@ -83,7 +79,7 @@ class Wheel():
     
         # Check torque limit exceeded
         if abs(u) >= T_limit:
-            print("Wheel torque input saturated at:", u)
+            # print("Wheel torque input saturated at:", u)
             u = T_limit*my_utils._sign(u)
 
         # Apply fault if enabled (self updated in fault class)
@@ -113,17 +109,18 @@ class Wheel():
         kp = self.config['controller']['kp_wheel_w']
         kd = self.config['controller']['kd_wheel_w']
         ki = self.config['controller']['ki_wheel_w']
-        # print(f"w_ref = {w_ref}")
-        # print(f"w = {w}")
-        # print(f"kp = {kp}")
-        # print(f"kd = {kd}")
+
         e = w_ref - w
         de = (e - self.e_prev)/self.t_sample
         e_int = e+self.e_prev*self.t_sample
         u = (kp*e + kd*de + ki*e_int)*self.M_inertia_fast
 
+        if abs(u) > self.T_max:
+            u = self.T_max*my_utils._sign(u)
+
         self.e_prev = e
         state = self.calc_state_rates(t, state, u)
+
         return state, u
 
 class WheelModule():

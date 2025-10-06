@@ -291,7 +291,7 @@ def plot_results_eso(LOG_FILE_NAME):
     df['wheel_speed_error_est_rpm'] = df['wheel_speed_error_est'] * 60 / 2 * np.pi  # Speed error in rpm
 
     df['wheel_speed_rpm'] = df['wheel_speed'] * 60 / 2 * np.pi
-    df['wheel_disturbance'] = - df['control_input_torque'] - df['wheel_torque']
+    df['wheel_disturbance'] = df['control_input_torque'] - df['wheel_torque']
     df['wheel_speed_est_rpm'] = df['wheel_speed_est'] * 60 / 2 * np.pi  # Estimated wheel speed
     df['wheel_torque_error_est'] = df['wheel_torque'] - df['wheel_torque_est']  # Estimated torque error
 
@@ -372,7 +372,8 @@ def plot_results_eso(LOG_FILE_NAME):
 
     ax2.plot(df['time'], df['wheel_control_authority'], label='Torque Fraction Available', linestyle='-', color='r')
     ax2.set_ylabel('Control Authority (Dimensionless)')
-    # ax2.set_ylim([0.0, 1.1])
+    if df['wheel_control_authority'].min() >= 0.0:
+        ax2.set_ylim([0.0, 1.1])
     ax2.legend(loc='upper right')
     plt.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_wheel_control_authority_vs_torque_n_disturbance.pdf"), bbox_inches='tight')
 

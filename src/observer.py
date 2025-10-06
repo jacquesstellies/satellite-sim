@@ -91,7 +91,7 @@ class WheelExtendedStateObserver():
                 return [w_est, f_est, dw_est]
 
         if abs(u[0]) > self.wheel.T_max:
-            print("Control input saturated at:", u[0])
+            # print("Control input saturated at:", u[0])
             u[0] = self.wheel.T_max*my_utils._sign(u[0])
 
         # T_est = self.M_inertia * dw_est
