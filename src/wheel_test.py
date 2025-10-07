@@ -17,18 +17,50 @@ class Simulation:
     t_prev = 0
     t_next = 0
     y_est = None  # Initial state estimate: [disturbance, wheel speed]
-    def __init__(self, type):
+    input_change_interval = 5  # Interval to change the input torque
+    def __init__(self, type, config):
         self.t_prev = 0
         if type == "extended":
             self.y_est = np.zeros(3)
         else:
             self.y_est = 0
+        self.period = config['simulation']['period']
+        self.input_torque = config['simulation']['input_torque']
+        self.input_torque_func = config['simulation']['input_torque_func']
+
+    input_torque = 0
+    def calc_input_torque(self, t):
+        if self.input_torque_func == "step":
+            u = self.input_torque
+        elif self.input_torque_func == "reverse_step":
+            if t >= self.period:
+                u = 0
+        elif self.input_torque_func == "impulse":
+            if self.t_next == 0:
+                self.input_torque = 1.0
+            else:
+                self.input_torque = 0.0
+        elif self.input_torque_func == "square":
+            if (t // self.period) % 2 == 0:
+                u = self.input_torque
+            else:
+                u = 0
+        elif self.input_torque_func == "sine":
+            u = self.input_torque * np.sin(2 * np.pi * t / self.period)
+        else:
+            u = self.input_torque
+        return u
+
 
     def wheel_extended_state_observer_simulate(self, t, y, u, wheel, observer):
+        u = self.calc_input_torque(t)
         y = wheel.calc_state_rates(t, y, u)
 
         dw = y[0]
         w = y[1]
+
+        # if self.input_change_interval is not None and t >= self.input_change_interval:
+        #     self.input_torque = 0
 
         if t >= self.t_next:
             self.t_next += observer.t_sample
@@ -102,7 +134,7 @@ def wheel_simulate(t, y, u, wheel):
 
     return y
 
-def test_wheel_constant_torque_response(config):
+def test_wheel_torque_response(config):
     fault = Fault(config)
     wheel = Wheel(config=config, fault=fault)
     duration = config['simulation']['duration']  # Simulation duration in seconds
@@ -129,11 +161,11 @@ def test_wheel_constant_torque_response(config):
 # def test_wheel_impulse_response(config):
 
 
-def test_wheel_extended_state_observer_constant_torque(config):
+def test_wheel_extended_state_observer_torque(config):
     fault = Fault(config)
     wheel = Wheel(config=config, fault=fault)
     observer = WheelExtendedStateObserver(config, wheel)
-    simulation = Simulation("extended")
+    simulation = Simulation("extended", config)
     duration = config['simulation']['duration']  # Simulation duration in seconds
 
     T_input = config['simulation']['input_torque']  # Constant torque input
@@ -169,7 +201,7 @@ def test_wheel_extended_state_observer_speed_control(config):
     fault = Fault(config)
     wheel = Wheel(config=config, fault=fault)
     observer = WheelExtendedStateObserver(config, wheel)
-    simulation = Simulation("extended")
+    simulation = Simulation("extended", config)
     duration = config['simulation']['duration']  # Simulation duration in seconds
 
     w_input = config['simulation']['w_ref_rpm']*2*np.pi/60  # Constant wheel speed reference
@@ -223,7 +255,7 @@ def test_wheel_observer(config):
         dense_output=True
     )
 
-# def test_wheel_observer_speed_step_response(config):
+# def test_wheel_observer_speed_speed(config):
 
 def plot_results():
 
@@ -380,26 +412,36 @@ def plot_results_eso(LOG_FILE_NAME):
 
 
 
-def parse_args():
-    choices = ['constant_torque', 'step_response']
+def parse_args(config):
+    choices = ['torque', 'speed']
     parser = argparse.ArgumentParser(description="Wheel Simulation Test")
     parser.add_argument('--config', type=str, default='wheel_test.toml', help='Path to the configuration TOML file')
-    parser.add_argument('--test', type=str, choices=choices, default='step_response', help='Type of test to run')
+    parser.add_argument('--test', type=str, choices=choices, default='torque', help='Type of test to run')
+    parser.add_argument('--input_func', type=str, default='step', help='Input torque function: step, impulse, square, sine')
     parser.add_argument('--append', '-a', type=str, default='', help='String to append to log file names')
     parser.add_argument('--date', '-d', action='store_true', default=False, help='Append date to log file names')
-    
     args = parser.parse_args()
+
+    if args.input_func:
+        config['simulation']['input_torque_func'] = args.input_func
+
     if args.test not in choices:
         parser.error(f"Invalid test type. Choose from {choices}.")
     
-    return parser.parse_args()
+    return args
 
 if __name__ == "__main__":
 
-    args = parse_args()
+    config = toml.load('wheel_test.toml')
+    args = parse_args(config)
 
     log_name = "wheels_test"
     log_name += f"_{args.test}"
+    log_name += f"_{config['simulation']['input_torque_func']}"
+    if config['fault']['master_enable']:
+        log_name += "_fault"
+    else:
+        log_name += "_nominal"
     if args.append:
         log_name += f"_{args.append}"
     if args.date:
@@ -407,19 +449,18 @@ if __name__ == "__main__":
         log_name += f"_{datetime.now().strftime(r'%Y-%m-%d')}"
     print(f"Logging to {log_name}")
 
-    config = toml.load('wheel_test.toml')
-    # test_wheel_constant_torque_response(config)
+    # test_wheel_torque_response(config)
     # plot_results()
 
     # test_wheel_impulse_response(config)
     # plot_results
     # test_wheel_observer(config)
     # plot_results_obs()
-    if args.test == 'constant_torque':
-        wheel = test_wheel_extended_state_observer_constant_torque(config)
+    if args.test == 'torque':
+        wheel = test_wheel_extended_state_observer_torque(config)
         plot_results_eso(log_name)
 
-    if args.test == 'step_response': 
+    if args.test == 'speed': 
         wheel = test_wheel_extended_state_observer_speed_control(config)
         plot_results_eso(log_name)
 

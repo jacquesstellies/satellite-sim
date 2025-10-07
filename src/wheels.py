@@ -48,7 +48,7 @@ class Wheel():
         # print(f"Wheel {self.index} inertia:\n", self.M_inertia_fast)
         print(f"Wheel {self.index} inertia inv:", self.M_inertia_inv_fast)
 
-        target_noise_db = 10
+        target_noise_db = 2
         target_noise_watts = 10 ** (target_noise_db / 10)
         self._noise_std = math.sqrt(target_noise_watts)
     
@@ -67,12 +67,13 @@ class Wheel():
         w = state[0]
 
         # Check wheel speed limit exceeded
-        if abs(w) >= self.w_max:
-            w = self.w_max*my_utils._sign(w)
-            if u != 0:
-                u = 0
-                dw = 0
-                return np.array([dw,w])
+        # if abs(w) >= self.w_max:
+        #     w = self.w_max*my_utils._sign(w)
+            # u = 0
+            # if u == 0:
+            #     u = 0
+            #     dw = 0
+            #     return np.array([dw,w])
 
         # Set fault torque limit
         T_limit = self.T_max
@@ -87,11 +88,14 @@ class Wheel():
             
         # Calculate the new wheel speed derivative
         dw = (u - self.friction_coef*w)*self.M_inertia_inv_fast
+
+        if (w >= self.w_max and dw > 0) or (w <= -self.w_max and dw < 0):
+            dw = 0
+        
         # return self.calc_sensor_output(np.array([dw,w]))
         return np.array([dw,w])
 
     def calc_sensor_output(self, state: np.array):
-        # noise = np.random.normal(0, self._noise_std, size=state.shape)
         noise = np.random.normal(0, self._noise_std, size=len(state))
         return state + noise
 

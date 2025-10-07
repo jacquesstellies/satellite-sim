@@ -61,6 +61,7 @@ class WheelExtendedStateObserver():
         k_fd = self.gain[2] if len(self.gain) > 2 else 0
         k_wd = self.gain[3] if len(self.gain) > 3 else 0
         k_wi = self.gain[4] if len(self.gain) > 4 else 0
+        k_fi = self.gain[5] if len(self.gain) > 5 else 0
 
         # dx_est = (self.A @ x_est).flatten() + self.b.flatten() * u[0] + np.array([k_w * e, k_f * e])
 
@@ -81,14 +82,13 @@ class WheelExtendedStateObserver():
         # print(f"k_f = {k_f}")
         # print(f"k_fd = {k_fd}")
 
-        if abs(w_est) >= self.wheel.w_max:
+        # if abs(w_est) >= self.wheel.w_max:
             # print("Wheel speed estimate saturated at:", w_est, "Resetting to max", self.wheel.w_max)
-            w_est = my_utils._sign(w_est) * self.wheel.w_max
-            if u[0] != 0:
-                u[0] = 0
-                dw_est = 0
-                f_est = 0
-                return [w_est, f_est, dw_est]
+            # w_est = my_utils._sign(w_est) * self.wheel.w_max
+            # if u[0] != 0:
+            #     u[0] = 0
+            #     dw_est = 0
+            #     return [w_est, f_est, dw_est]
 
         if abs(u[0]) > self.wheel.T_max:
             # print("Control input saturated at:", u[0])
@@ -99,7 +99,11 @@ class WheelExtendedStateObserver():
         #     dw_est = np.sign(dw_est) * self.wheel.T_max / self.M_inertia
 
         dw_est = (-self.friction_coef * w_est + u[0]) * self.M_inertia_inv + f_est * self.M_inertia_inv + e*k_w + de*k_wd + e_int*k_wi
-        df_est = k_f * e + k_fd*de
+        df_est = k_f * e + k_fd*de + k_fi*e_int
+
+        if (w_est >= self.wheel.w_max and dw_est > 0) or (w_est <= -self.wheel.w_max and dw_est < 0):
+            dw_est = 0
+            df_est = 0
 
         # print(f"t_sample {self.t_sample}, t = {t}")
 
