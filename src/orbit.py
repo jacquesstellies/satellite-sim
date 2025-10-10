@@ -67,17 +67,17 @@ class Disturbances():
             # print(cos_alpha)
             A_p = cos_alpha_h*cos_alpha*face.area
             # print(f"face {i}  {density*np.power(np.linalg.norm(va_b,2),2)*A_p}")
-            # print(f"face {i}  {(sigma_t*np.cross(face.r_cop_to_com,va_b)) + 
+            # print(f"face {i}  {(sigma_t*my_utils.cross_product(face.r_cop_to_com,va_b)) + 
             #                 ((sigma_n*0.05) + (2-sigma_n-sigma_t)*cos_alpha)*
-            #                 np.cross(face.r_cop_to_com,-1*face.norm_vec)}")
+            #                 my_utils.cross_product(face.r_cop_to_com,-1*face.norm_vec)}")
             T_aero_tmp = (density*np.power(np.linalg.norm(va_b,2),2)*A_p)*(
-                        (sigma_t*np.cross(face.r_cop_to_com,va_b)) + 
+                        (sigma_t*my_utils.cross_product(face.r_cop_to_com,va_b)) + 
                             ((sigma_n*0.05) + (2-sigma_n-sigma_t)*cos_alpha)*
-                            np.cross(face.r_cop_to_com,-1*face.norm_vec)
+                            my_utils.cross_product(face.r_cop_to_com,-1*face.norm_vec)
                         )
             T_aero += T_aero_tmp
             # print(T_aero_tmp)
-        # print(np.cross(face.r_cop_to_com,va_b))
+        # print(my_utils.cross_product(face.r_cop_to_com,va_b))
         return T_aero
     
     def calc_grav_torque(self, satellite, q):
@@ -85,8 +85,8 @@ class Disturbances():
         dcm = rotation_obj.as_matrix()
         u_e = dcm@np.array([0,0,1])
         
-        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*np.cross(u_e,satellite.M_inertia@u_e)
-        # print(np.cross(u_e,satellite.M_inertia@u_e))
+        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product(u_e,satellite.M_inertia@u_e)
+        # print(my_utils.cross_product(u_e,satellite.M_inertia@u_e))
         # print(satellite.M_inertia@u_e)
         return T_grav
 

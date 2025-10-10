@@ -1,4 +1,4 @@
-from observer import WheelExtendedStateObserver
+from observer import WheelExtendedStateObserver, ObserverModule
 from satellite import Satellite
 from controller import Controller
 from fault import Fault
@@ -34,17 +34,17 @@ DEBUG = True
 def output_dict_to_csv(path, file_name, data):
     df = pd.DataFrame().from_dict(data)
 
-    with open(fr'{path}\{file_name}.csv', 'w+') as file:
+    with open(fr'{path}/{file_name}.csv', 'w+') as file:
         df.to_csv(file,sep=',')
 
 def output_toml_to_file(path, file_name, data):
-    with open(fr'{path}\{file_name}.toml', 'w+') as file:
+    with open(fr'{path}/{file_name}.toml', 'w+') as file:
         toml.dump(data, file)
 
 def log_to_file(path, file_name, string, print_c=True):
     if print_c:
         print(string)
-    with open(fr'{path}\{file_name}.csv', 'a+') as file:
+    with open(fr'{path}/{file_name}.csv', 'a+') as file:
         file.write(string+'\n')
         
 def interpolate_data(data, time_series, time_series_new):
@@ -61,6 +61,8 @@ def create_default_log_file_name(config):
     
     if config['fault']['master_enable']:
         filename += '_fault'
+    else:
+        filename += '_nom'
     
     if config['simulation']['iterations'] > 1:
         filename += '_mc'
@@ -93,27 +95,30 @@ def parse_args():
     else:
         LOG_FILE_NAME = args["output_name"]
 
-    if args["test_mode"] is False:
-        config['simulation']['test_mode_en'] = False
-    else:
+    if args["test_mode"] is True:
         config['simulation']['test_mode_en'] = True
     
     if args["disable_sim"] is True:
         config['simulation']['enable'] = False
 
     if append_date is True and LOG_FILE_NAME is not None:
-        dt_string = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+        dt_string = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         LOG_FILE_NAME += f"_{dt_string}"
     if args['append'] is not None:
         LOG_FILE_NAME += f"_{args['append']}"
 
-    LOG_FOLDER_BASE_PATH = os.path.abspath(r'../data_logs')
+    LOG_FOLDER_BASE_PATH = os.path.abspath('../data_logs')
     LOG_FOLDER_PATH = os.path.join(LOG_FOLDER_BASE_PATH,LOG_FILE_NAME)
     if not os.path.exists(LOG_FOLDER_BASE_PATH) and LOG_FILE_NAME != None:
         raise Exception(f"Log folder {LOG_FOLDER_BASE_PATH} does not exist")
     
     print(f"output name is {LOG_FILE_NAME}")
     print(f"output folder is {LOG_FOLDER_PATH}")
+    ROOT_DIR = os.popen("git rev-parse --show-toplevel").read().strip()
+
+    with open(f"{ROOT_DIR}/last_log.txt", "w") as file:
+        file.write(LOG_FOLDER_PATH if LOG_FILE_NAME != None else "No logging")
+
     return LOG_FILE_NAME, LOG_FOLDER_PATH, config
 
 def clear_log_file(log_file_path):
@@ -127,6 +132,7 @@ class Simulation:
     config = None
     monte_carlo = False
     results_data = None
+    results_df : pd.DataFrame = None
     iter = 0
 
     def __init__(self, config, results_data, logging_en=True):
@@ -143,16 +149,13 @@ class Simulation:
         else:
             dir_init = Rotation.from_quat(config['satellite']['q_init'])
 
-        for i in range(wheel_module.num_wheels):
-            self.results_data['wheel_speed_' + str(i)] = []
-            self.results_data['wheel_torque_' + str(i)] = []
-
         w_sat_init = np.array([0,0,0])
 
         controller = Controller(fault=fault, wheel_module=wheel_module, results_data=results_data, w_sat_init=np.zeros(3), q_sat_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
                                     config=config)
+        observer_module = ObserverModule(config, results_data, wheel_module)
 
-        self.satellite = Satellite(wheel_module, controller, fault, config=config, results_data=results_data, logging_en=logging_en)
+        self.satellite = Satellite(wheel_module, controller, observer_module, fault, config=config, results_data=results_data, logging_en=logging_en)
 
         # Satellite Initial Conditions
         self.satellite.dir_init = dir_init
@@ -190,21 +193,27 @@ class Simulation:
             entry.clear()
 
     def simulate(self):
+        if self.config['observer']['enable'] is True:
+            max_step = np.min([self.satellite.controller.t_sample, self.satellite.observer_module.t_sample])
+        else:
+            max_step = self.satellite.controller.t_sample
+        
+        self.sim_time_series = np.arange(0, self.sim_time, max_step)
         sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
                         t_eval=self.sim_time_series,
-                        max_step=self.satellite.controller.t_sample)
+                        max_step=max_step)
         # Integrate satellite dynamics over time
         return sol
     def simulate_multithread(self):
         self.results_data = None
         print(f"Starting sim {self.iter}")
         sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
-                        t_eval=self.sim_time_series,
+                        # t_eval=self.sim_time_series,
                         max_step=self.satellite.controller.t_sample)
         self.results_data = sol
 
     def collect_results(self, sol):
-
+        
         for i,axis in enumerate(my_utils.xyz_axes):
             self.results_data[f'angular_rate_{axis}'] = interpolate_data(sol.y[i], sol.t, self.sim_time_series)
 
@@ -213,25 +222,31 @@ class Simulation:
         
         for i,axis in enumerate(my_utils.xyz_axes):
             self.results_data[f'control_energy_{axis}'] = interpolate_data(sol.y[i+7], sol.t, self.sim_time_series)
-
+        
         # Put results into data object
         for key, value in self.results_data.items():
             if key == 'time':
                 continue
-            if len(value) > int(self.sim_time/self.sim_output_resolution_time):
-                if key[:7] == "control":
-                    self.results_data[key] = interpolate_data(value, self.results_data['control_time'], self.sim_time_series)[:]
-                else:
-                    try:
-                        self.results_data[key] = interpolate_data(value, self.results_data['time'], self.sim_time_series)[:]
-                    except:
-                        print(f"Error interpolating {key}")
+            if len(value) == len(self.results_data['time']):
+                self.results_data[key] = interpolate_data(value, self.results_data['time'], self.sim_time_series)[:]
+        for key, value in self.results_data.items():
+            if len(value) != len(self.sim_time_series):
+                print(f"Warning: {key} has length {len(value)} but time has length {len(self.sim_time_series)}")
+                # self.results_data[key] = interpolate_data(value, self.results_data['time'], self.sim_time_series)[:]
+            # else:
+                # raise(Exception(f"Warning: {key} has length {len(value)} but time has length {len(self.results_data['time'])}"))
         
         self.results_data['time'] = self.sim_time_series
-        self.results_data['control_time'] = self.sim_time_series
-        
-        # print(f"quaternion_x size {len(self.results_data['quaternion_x'])}")
-        # print(f"time size {len(self.results_data['time'])}")
+
+        for i, wheel in enumerate(self.satellite.wheel_module.wheels):
+            self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
+            # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
+
+        # self.results_df['euler_axis'] = 
+        # r_1 : Rotation = Rotation.from_quat([self.results_data['quaternion_x'],
+        #                                     self.results_data['quaternion_y'],
+        #                                     self.results_data['quaternion_z'],
+        #                                     self.results_data['quaternion_w']])
         self.results_data['euler_axis'] = []
         for row in range(len(self.results_data['time'])):
             r_1 : Rotation = Rotation.from_quat([self.results_data['quaternion_x'][row],
@@ -256,6 +271,8 @@ class Simulation:
         
         if self.config['output']['accuracy_enable']:
             self.calc_accuracy_output_results()
+        
+        self.results_df = pd.DataFrame.from_dict(self.results_data)
     
     control_energy_log_output = ""
     def calc_control_energy_output_results(self, control_energy_arr):
@@ -316,11 +333,9 @@ class Simulation:
             print(f"Error calculating accuracy: {e}")
 
     def log_output_to_file(self, LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en):
-        if os.path.exists(LOG_FOLDER_PATH) is False:
-            os.mkdir(LOG_FOLDER_PATH)
         if LOG_FILE_NAME != None and test_mode_en is False:
             LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
-            # clear_log_file(fr"{LOG_FOLDER_PATH}\{LOG_FILE_NAME_RESULTS}")
+            # clear_log_file(fr"{LOG_FOLDER_PATH}/{LOG_FILE_NAME_RESULTS}")
             output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", self.results_data)
             output_toml_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME + "_config", self.config)
             if self.accuracy_percent is not None:
@@ -331,7 +346,7 @@ class Simulation:
             log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"{self.steady_state}", False)
 
     def create_plots_separated(self, rows, results_data, config, LOG_FILE_NAME):
-            # Create separate figures if enabled in config
+        # Create separate figures if enabled in config
         for row in rows:
             row_name, axes, label = row
             fig_separate = plt.figure(figsize=(12,6))
@@ -340,13 +355,14 @@ class Simulation:
             for axis in axes:
                 if axis != 'none':
                     name = row_name + "_" + axis
+                    # print(f"displaying plot of {name}")
                 else:
                     axis = None
                     name = row_name
-                try:
-                    ax_separate.plot(results_data['time'], results_data[name], label=axis)
-                except Exception as e:
-                    print(f"Error plotting {name}: {e}")
+                # try:
+                ax_separate.plot(results_data['time'], results_data[name], label=axis)
+                # except Exception as e:
+                    # print(f"Error plotting {name}: {e}")
 
             
             ax_separate.set_xlabel('time (s)')
@@ -355,12 +371,44 @@ class Simulation:
                 ax_separate.legend()
             
             if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
-                if not os.path.exists(fr"..\data_logs\{LOG_FILE_NAME}\graphs"):
-                    os.mkdir(fr"..\data_logs\{LOG_FILE_NAME}\graphs")
-                fig_separate.savefig(fr"..\data_logs\{LOG_FILE_NAME}\graphs\{LOG_FILE_NAME}_{row_name}.pdf", bbox_inches='tight')
+                if not os.path.exists(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs")):
+                    os.mkdir(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs"))
+                fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}.pdf"), bbox_inches='tight')
+            
             if config['output']['separate_plots_display'] is False:
                 plt.close(fig_separate)
     
+    def create_plots_comparison(self, rows : list, label : str, graph_name: str, results_data : dict, config : dict, LOG_FILE_NAME : str , show : bool = False):
+        fig = plt.figure(figsize=(12,6))
+        ax = fig.add_subplot(111)
+        for row_idx, row in enumerate(rows):
+            row_name, axes = row
+            
+            for axis_idx, axis in enumerate(axes):
+                if axis != 'none':
+                    name = row_name + "_" + axis
+                    # print(f"displaying plot of {name}")
+                else:
+                    axis = None
+                    name = row_name
+                try:
+                    ax.plot(results_data['time'], results_data[name], label=axis, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
+                    
+                except Exception as e:
+                    print(f"Error plotting {name}: {e}")
+        if show is True or config['output']['show_plots'] is True:
+            try:
+                plt.show()
+            except Exception as e:
+                print(f"Error showing plots: {e}")
+
+
+        ax.set_xlabel('time (s)')
+        ax.set_ylabel(label)
+
+        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
+            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{graph_name}.pdf"), bbox_inches='tight')
+
     def create_plots_combined(self, rows, cols, results_data, config, LOG_FILE_NAME, type='line', x_axis=None):
         fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
 
@@ -398,10 +446,8 @@ class Simulation:
                 print(f"Error showing plots: {e}")
 
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
+            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.pdf"), bbox_inches='tight')
 
-            fig.savefig(fr"..\data_logs\{LOG_FILE_NAME}\{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
-
-# class MonteCarloSimulation(Simulation):
 def generate_rand_rot():
     """Generate a 3D random rotation matrix.
 
@@ -437,6 +483,8 @@ def generate_rand_quat() -> np.quaternion:
 
 def main():
     LOG_FILE_NAME, LOG_FOLDER_PATH, config = parse_args()
+    if os.path.exists(LOG_FOLDER_PATH) is False:
+        os.mkdir(LOG_FOLDER_PATH)
     results_data = {}
     results_data["time"] = []
     for axis in my_utils.xyz_axes:
@@ -541,15 +589,28 @@ def main():
             print("Simulation Complete")
             cols = 2
             ## Row should be in the form of (row_name, [axes], label)
-            rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular velocity (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
-                    ('torque',my_utils.xyz_axes, 'Torque (N)'), ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')]
-                       
+            rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular velocity (rad/s)'), \
+                    ('quaternion',my_utils.q_axes, 'Quaternion'), \
+                    ('euler_int',['none'], 'Euler integral (deg)'), \
+                    ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
+                    ('torque',my_utils.xyz_axes, 'Torque (Nm)'), \
+                    ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), \
+                    ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (Nm)')]
+
             if satellite.wheels_control_enable:
-                # rows.append(('wheel_speed', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
-                rows.append(('wheel_torque', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel Torque (N)'))
+                _axes = [str(wheel.index) for wheel in wheel_module.wheels]
+                rows_2.append(('T_wheels', _axes, 'Wheel Torque (Nm)'))
+                rows_2.append(('w_wheels', _axes, 'Wheel speed (rad/s)'))
+                
+                rows_2 = []        
+                rows_2.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
+                rows_2.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
+                rows_2.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
 
             simulation.create_plots_separated(rows, results_data, config, LOG_FILE_NAME)
             simulation.create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME)
+
+            simulation.create_plots_separated(rows_2, results_data, config, LOG_FILE_NAME)
 
         else:
             #-------------------------------------------------------------#
@@ -557,25 +618,32 @@ def main():
             if sim_iter == 1:
                 print(f"Running Once-off simulation")
                 sol = simulation.simulate()
+
                 print("Simulation Complete")
+                
+                if (test_mode_en):
+                    exit(0)
                 simulation.collect_results(sol)
 
-                # simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
+                simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 
+                ## Row should be in the form of (row_name, [axes], label)
                 cols = 2
                 rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular velocity (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
                         ('torque',my_utils.xyz_axes, 'Torque (N)'), ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')]
                 
-                ## Row should be in the form of (row_name, [axes], label)
-                # rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular rate (rad/s)'), 
-                #         ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), 
-                #         ('euler_int',['none'], 'Euler integral (deg)'), 
-                #         ]
-                
-                if satellite.wheels_control_enable:
-                    # rows.append(('wheel_speed', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
-                    rows.append(('wheel_torque', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel Torque (N)'))
 
+                rows_2 = []
+                if satellite.wheels_control_enable:
+                    _axes = [str(wheel.index) for wheel in wheel_module.wheels]
+                    rows_2.append(('T_wheels', _axes, 'Wheel Torque (Nm)'))
+                    rows_2.append(('w_wheels', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
+                    rows_2.append(('E', _axes, 'Actuator Authority Estimate (Fraction)'))
+
+                    rows_2.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
+                    rows_2.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
+                    rows_2.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
+                    rows_2.append(('E_est', _axes, 'Actuator Authority Estimate (Fraction)'))
                 if controller.type == "adaptive":
                     rows.append(('control_adaptive_model_output',['none']))
                     rows.append(('control_theta',my_utils.xyz_axes))
@@ -583,6 +651,14 @@ def main():
                 simulation.create_plots_separated(rows, results_data, config, LOG_FILE_NAME)
                 simulation.create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME)
 
+                simulation.create_plots_separated(rows_2, results_data, config, LOG_FILE_NAME)
+
+                simulation.create_plots_comparison([('w_wheels', _axes),
+                                    ('w_wheels_est', _axes)
+                                    ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', results_data, config, LOG_FILE_NAME, show=False)
+                simulation.create_plots_comparison([('T_wheels', _axes),
+                                    ('T_wheels_est', _axes)
+                                    ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', results_data, config, LOG_FILE_NAME, show=False)
             #-------------------------------------------------------------#
             ###################### Monte Carlo ############################
             elif sim_iter > 1:
@@ -662,7 +738,7 @@ def main():
 
 if __name__ == '__main__':
 
-    cProfile.run('main()', '../data_logs/profile_stats.prof')
+    cProfile.run('main()', os.path.abspath('../data_logs/profile_stats.prof'))
 
 
 

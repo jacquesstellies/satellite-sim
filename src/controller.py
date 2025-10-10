@@ -6,13 +6,13 @@ from fault import Fault
 import observer
 
 class Controller:
-    enable = True
-    T_max = None
-    T_min = 0
-    t_sample = 0.1
-    filter_coef = 0
-    k=1
-    c=1
+    enable : bool = True
+    T_max : float = None
+    T_min : float = 0.0
+    t_sample : float = 0.1
+    filter_coef : float = 0.0
+    k : float = 1.0
+    c : float = 1.0
     _fault : Fault = None
     type="q_feedback"
     types = ["q_feedback", "backstepping", "adaptive"]
@@ -22,9 +22,16 @@ class Controller:
     wheel_extended_state_observers = []
     results_data = None
 
+    u_vec_prev : np.array = np.zeros(3)
+    u_wheels_prev : np.array = None
+
     def __init__(self, fault=None, wheel_module=None, results_data=None,
                  w_sat_init=None, q_sat_init=None, config=None):
         self.results_data = results_data
+        self._fault = fault
+        self.config = config
+        self.wheel_module = wheel_module
+
         self.enable = config['controller']['enable']
         self.T_max = config['controller']['T_max']
         self.T_min = config['controller']['T_min']
@@ -38,7 +45,6 @@ class Controller:
         self.c = config['controller']['c']
         if len(self.c) != 3:
             raise("error c must be a list of length 3")
-        self._fault = fault
         self.type = config['controller']['type']
         if self.type not in self.types:
             raise Exception(f"controller type {type} type is not a valid type")
@@ -53,20 +59,7 @@ class Controller:
                 self.results_data[f'control_theta_{axis}'] = []
         if self.type == "adaptive":
             print("adaptive gain ", self.adaptive_gain)
-        self.results_data['control_time'] = []
-        self.results_data['control_time'].append(0)
         self.h = 0.1
-        self.config = config
-        self.wheel_module = wheel_module
-        for wheel in wheel_module.wheels:
-            eso = observer.WheelExtendedStateObserver(config, wheel)
-            self.wheel_extended_state_observers.append(eso)
-
-        E_prev = np.eye(self.wheel_module.num_wheels)
-        for i in range(wheel_module.num_wheels):
-            self.results_data[f'w_wheels_est_{i}'] = []
-            self.results_data[f'f_wheels_est_{i}'] = []
-            self.results_data[f'dw_wheels_est_{i}'] = []
         
         if config['simulation']['tuning'] is False:
             self.alpha = self.config['backstepping']['alpha']
@@ -76,24 +69,25 @@ class Controller:
             self.upsilon = self.config['backstepping']['upsilon']
             self.c_1 = self.config['backstepping']['c_1']
             self.c_2 = self.config['backstepping']['c_2']
+        
+        self.u_vec_prev = np.zeros(3)
+        self.u_wheels_prev = np.zeros(self.wheel_module.num_wheels)
 
-    u_prev = 0
     def calc_q_feedback_control_torque(self, q_curr, w, q_ref, M_inertia, H_wheels):
-        K = np.diag(np.full(3,self.k))
-        C = np.diag(self.c)
+        # K = np.diag(np.full(3,self.k))
+        # C = np.diag(self.c)
         w = np.array(w)
         
         q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(q_ref) # q_ref is already normalized
 
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
-        Hnet = M_inertia@(w) + H_wheels
+        # Hnet = M_inertia@(w) + H_wheels
 
-        # return + K@q_error_vec - C@w + np.cross(w, Hnet)
+        # return + K@q_error_vec - C@w + my_utils.cross_product(w, Hnet)
 
         return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w
     
     h = 0
-    u_wheels_prev = np.zeros(4)
     sub_types = ["linear", "arctan", "Shen"]
 
     # Shen variables
@@ -147,33 +141,26 @@ class Controller:
         #         - g*(e[2])
         elif self.config["controller"]["sub_type"] == "Shen":
             u_max = self.config["wheels"]["max_torque"]
-            D_plus = satellite._wheel_module.D_psuedo_inv
-            eta_0 = np.linalg.norm(D_plus)
-            alpha = self.alpha
-            beta = self.beta
-            k = self.k
-            eta_1 = self.eta_1
-            upsilon = self.upsilon
-            c_1 = self.c_1
-            c_2 = self.c_2
+            D_plus = satellite.wheel_module.D_psuedo_inv
+            # eta_0 = np.linalg.norm(D_plus)
 
             Omega = np.linalg.norm(w)**2 + np.linalg.norm(w) + 1
-            s = w - alpha*np.arctan(beta*quaternion.as_vector_part(q_curr))
+            s = w - self.alpha*np.arctan(self.beta*quaternion.as_vector_part(q_curr))
             s_norm = np.linalg.norm(s)
             s_norm_pow2 = s_norm**2
-            eta_2 = upsilon/Omega
+            eta_2 = self.upsilon/Omega
 
             # Update h
-            h_dot = -c_1*self.h + c_2*(Omega*s_norm_pow2)/(s_norm + eta_2) 
+            h_dot = -self.c_1*self.h + self.c_2*(Omega*s_norm_pow2)/(s_norm + eta_2) 
             self.h = self.h + h_dot*self.t_sample
 
-            D = satellite._wheel_module.D
+            D = satellite.wheel_module.D
             if True:
                 A = D_plus
                 B = np.atleast_2d(s).T
-                c = -1*(k + self.h*Omega/(s_norm + eta_2))
+                c = -1*(self.k + self.h*Omega/(s_norm + eta_2))
                 C = D_plus@np.atleast_2d(s).T * c
-                phi = -1 * (1 / (s_norm**2 + eta_1**2))
+                phi = -1 * (1 / (s_norm**2 + self.eta_1**2))
                 F = np.atleast_2d(s) @ D @ E * phi
             
                 u = C + (F@C/(1 - F@A@B))*A@B
@@ -182,67 +169,50 @@ class Controller:
                 if not satellite._fault.master_enable:
                     f = np.ones(3)
                 else:
-                    f = -1*satellite._wheel_module.D@satellite._fault.mul_fault_matrix@self.u_wheels_prev
+                    f = -1*satellite.wheel_module.D@satellite._fault.mul_fault_matrix@self.u_wheels_prev
 
-                Gamma = k + s@f.reshape(-1,1)/(s_norm_pow2+eta_1**2) + self.h*Omega/(s_norm+eta_2)
+                Gamma = self.k + s@f.reshape(-1,1)/(s_norm_pow2+self.eta_1**2) + self.h*Omega/(s_norm+eta_2)
                 test = u_max/(eta_0*Gamma)
                 if(s_norm >= test):
                     u = (D_plus*u_max)@s/(s_norm*eta_0)
                 else:
                     u = -1*Gamma*D_plus@s
-
-            if(np.shape(u)[0] != satellite._wheel_module.num_wheels):
+            if(np.shape(u)[0] != satellite.wheel_module.num_wheels):
                 raise(Exception("invalid shape of u"))
                 
-            self.u_wheels_prev = u
 
         return u
 
-    E_prev = None
-    def calc_torque_control_output(self, q_curr : np.quaternion,  w : list[float], q_ref : np.quaternion, satellite, w_wheels, H_wheels, t) -> np.array:
+    next_t_sample : float = 0
+    def calc_torque_control_output(self, t, q_curr : np.quaternion,  w : list[float], q_ref : np.quaternion, satellite, w_wheels, E) -> np.array:
+        if t >= self.next_t_sample:
+            self.next_t_sample += self.t_sample
+        else:
+            return self.u_vec_prev, self.u_wheels_prev
         
-        w_wheels_est = np.zeros(4)
-        f_wheels_est = np.zeros(4)
-        dw_wheels_est = np.zeros(4)
- 
+        q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(q_ref)
+        H_wheels = satellite.wheel_module.D@w_wheels # @TODO check this!!!
         if self.type == "q_feedback":
             u = self.calc_q_feedback_control_torque(q_curr, w, q_ref, satellite.M_inertia, H_wheels)
-            # u = self.inject_fault(u)
             if self.type == "adaptive":
                 u = self.calc_adaptive_control_torque_output(u, q_curr, q_ref)
+            u_vec = u
+            u_wheels = satellite.wheel_module.D_psuedo_inv@u_vec
 
         elif self.type == "backstepping":
-            E = np.eye(len(self.wheel_extended_state_observers))
-            E = satellite._fault.mul_fault_matrix
-            if self.config["controller"]["observer_enable"] is True:
-                for i, wheel_extended_state_observer in enumerate(self.wheel_extended_state_observers):
-                    [w_wheels_est, f_wheels_est[i], dw_wheels_est] = wheel_extended_state_observer.calc_state_rates(self, t, [w_wheels_est, f_wheels_est], [self.u_wheels_prev[i], w_wheels[i]])
-                    # E[i][i] = f_wheels_est/self.wheel_module.wheels[i].T_max
-                    f_est = f_wheels_est/self.u_prev
-                    f_est_prev = self.E_prev[i][i]
-                    if np.abs(f_est_prev - f_est) > 0.1:
-                        E[i][i] = f_est
-
-            # E = satellite._fault.mul_fault_matrix
-            # if count_debug < COUNT_DEBUG_MAX:
-            # print(f"backstepping control")
-                # count_debug += 1
-            u = self.calc_backstepping_control_torque(q_curr, w, q_ref, satellite, E)
+            u = self.calc_backstepping_control_torque(q_error, w, satellite, E)
+            u_wheels = u
+            u_vec = satellite.wheel_module.D@u_wheels
         else:
             raise Exception(f"controller type {self.type} is not a valid type")
         # print(f"u {u.shape}")
-        u = self.limit_torque(u)
+        # u = self.limit_torque(u)
         
-        # u = self.low_pass_filter(u, self.u_prev, self.filter_coef)
+        # u = self.low_pass_filter(u, self.u_vec_prev, self.filter_coef)
         
-        self.results_data['control_time'].append(t)
-        # if self.config["controller"]["observer_enable"] is True:
-        for i in range(self.wheel_module.num_wheels):
-            self.results_data[f'w_wheels_est_{i}'].append(w_wheels_est[i])
-            self.results_data[f'f_wheels_est_{i}'].append(f_wheels_est[i])
-            self.results_data[f'dw_wheels_est_{i}'].append(dw_wheels_est[i])
+        self.u_vec_prev, self.u_wheels_prev = u_vec, u_wheels
 
-        return u
+        return u_vec, u_wheels
     
     
     def update_M_inertia_inv_model(self, M_inertia_inv_model):

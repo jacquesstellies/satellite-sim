@@ -42,16 +42,16 @@ class Wheel():
         self.index = index
         self.t_sample = self.config['controller']['t_sample']
         self.friction_coef = self.config['wheels']['friction_coef']
-        print("Initializing wheel with friction coef:", self.friction_coef)
         self.calc_M_inertia()
-
-        # print(f"Wheel {self.index} inertia:\n", self.M_inertia_fast)
-        print(f"Wheel {self.index} inertia inv:", self.M_inertia_inv_fast)
 
         target_noise_db = 2
         target_noise_watts = 10 ** (target_noise_db / 10)
         self._noise_std = math.sqrt(target_noise_watts)
     
+        w = 0.0
+        dw = 0.0
+        H = 0.0
+        dH = 0.0
     def calc_M_inertia(self):
         # Moment of inertia
         self.M_inertia[0][0] = 0.25*self.mass*pow(self.dimensions['radius'],2) + (1/12)*self.mass*pow(self.dimensions['height'],2)
@@ -64,36 +64,28 @@ class Wheel():
 
 
     def calc_state_rates(self, t, state, u):
-        w = state[0]
-
-        # Check wheel speed limit exceeded
-        # if abs(w) >= self.w_max:
-        #     w = self.w_max*my_utils._sign(w)
-            # u = 0
-            # if u == 0:
-            #     u = 0
-            #     dw = 0
-            #     return np.array([dw,w])
-
+        self.w = state
+        # print(f"wheel {self.index} state: {state}, torque input: {u}, t = {t}")
         # Set fault torque limit
         T_limit = self.T_max
     
         # Check torque limit exceeded
         if abs(u) >= T_limit:
-            # print("Wheel torque input saturated at:", u)
             u = T_limit*my_utils._sign(u)
 
         # Apply fault if enabled (self updated in fault class)
         u = self._fault.E[self.index][self.index] * u
             
         # Calculate the new wheel speed derivative
-        dw = (u - self.friction_coef*w)*self.M_inertia_inv_fast
+        self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
 
-        if (w >= self.w_max and dw > 0) or (w <= -self.w_max and dw < 0):
-            dw = 0
+        if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
+            self.dw = 0
         
+        self.dH = self.dw*self.M_inertia_fast
+        self.H = self.w*self.M_inertia_fast
         # return self.calc_sensor_output(np.array([dw,w]))
-        return np.array([dw,w])
+        # return dw
 
     def calc_sensor_output(self, state: np.array):
         noise = np.random.normal(0, self._noise_std, size=len(state))
@@ -180,18 +172,36 @@ class WheelModule():
 
         if config['controller']['type'] == "backstepping" and config['controller']['sub_type'] == "Shen":
             self._D_psuedo_inv_local = np.eye(self.num_wheels)
+        
+        self.w_wheels = np.array(self.num_wheels)
+        self.dw_wheels = np.array(self.num_wheels)
+        self.H_wheels = np.array(self.num_wheels)
+        self.dH_wheels = np.array(self.num_wheels)
+        self.H_vec = np.zeros(3)
+        self.dH_vec = np.zeros(3)
 
-
+    w_wheels = None
+    dw_wheels = None
+    H_wheels = None
+    dH_wheels = None
+    H_vec = None
+    dH_vec = None
     def calc_state_rates(self, t, state, u : np.array):
         # dw = state[:self.num_wheels]
         # w = state[self.num_wheels:]
-
-        T_c = self._D_psuedo_inv_local@u
+        if len(u) != self.num_wheels:
+            raise Exception(f"invalid control torque length {len(u)}")
+            
         for wheel in self.wheels:
-            [dw_wheel, w_wheel] = wheel.calc_state_rates(t, [state[wheel.index],state[wheel.index + self.num_wheels]], T_c[wheel.index])
-            state[wheel.index] = dw_wheel
-            state[wheel.index + self.num_wheels] = w_wheel
-        return state
+            wheel.calc_state_rates(t, state[wheel.index], u[wheel.index])
+
+        self.w_wheels = np.array([wheel.w for wheel in self.wheels])
+        self.dw_wheels = np.array([wheel.dw for wheel in self.wheels])
+        self.H_wheels = np.array([wheel.H for wheel in self.wheels])
+        self.dH_wheels = np.array([wheel.dH for wheel in self.wheels])
+
+        self.H_vec = self.D @ self.H_wheels
+        self.dH_vec = self.D @ self.dH_wheels
     
     # calc_state_rates_optmized
 
