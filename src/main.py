@@ -373,7 +373,7 @@ class Simulation:
             if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
                 if not os.path.exists(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs")):
                     os.mkdir(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs"))
-                fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}.pdf"), bbox_inches='tight')
+                fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}.png"), bbox_inches='tight')
             
             if config['output']['separate_plots_display'] is False:
                 plt.close(fig_separate)
@@ -407,7 +407,7 @@ class Simulation:
         ax.set_ylabel(label)
 
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{graph_name}.pdf"), bbox_inches='tight')
+            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{graph_name}.png"), bbox_inches='tight')
 
     def create_plots_combined(self, rows, cols, results_data, config, LOG_FILE_NAME, type='line', x_axis=None):
         fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
@@ -446,7 +446,7 @@ class Simulation:
                 print(f"Error showing plots: {e}")
 
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.pdf"), bbox_inches='tight')
+            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.png"), bbox_inches='tight')
 
 def generate_rand_rot():
     """Generate a 3D random rotation matrix.
