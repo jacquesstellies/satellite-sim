@@ -4,3 +4,4 @@ pytest_cache*
 *.log
 *.csv
 data_logs/
+last_log.txt
