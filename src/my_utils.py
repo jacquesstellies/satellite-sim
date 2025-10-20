@@ -51,6 +51,13 @@ def conv_Rotation_obj_to_euler_axis_angle(r : Rotation):
     alpha = np.arccos(0.5*(np.trace(r.as_matrix())-1))
     return alpha
 
+# assumes scalar-last format
+def get_principle_angle_from_array(q):
+    return 2*np.arctan2(np.linalg.norm(q[:3]), q[3])
+
+def get_principal_angle_from_np_quaternion(q : np.quaternion):
+    return 2*np.arctan2(np.linalg.norm([q.x, q.y, q.z]), q.w)
+
 def round_dict_values(d, k):
     return {key: float(f"{value:.{k}E}") for key, value in d.items()}
 

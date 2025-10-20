@@ -13,7 +13,7 @@ class Controller:
     filter_coef : float = 0.0
     k : float = 1.0
     c : float = 1.0
-    _fault : Fault = None
+    _faults : list[Fault] = None
     type="q_feedback"
     types = ["q_feedback", "backstepping", "adaptive"]
     adaptive_gain = 0
@@ -25,10 +25,10 @@ class Controller:
     u_vec_prev : np.array = np.zeros(3)
     u_wheels_prev : np.array = None
 
-    def __init__(self, fault=None, wheel_module=None, results_data=None,
+    def __init__(self, faults=None, wheel_module=None, results_data=None,
                  w_sat_init=None, q_sat_init=None, config=None):
         self.results_data = results_data
-        self._fault = fault
+        self._faults = faults
         self.config = config
         self.wheel_module = wheel_module
 
@@ -73,19 +73,25 @@ class Controller:
         self.u_vec_prev = np.zeros(3)
         self.u_wheels_prev = np.zeros(self.wheel_module.num_wheels)
 
-    def calc_q_feedback_control_torque(self, q_curr, w, q_ref, M_inertia, H_wheels):
+        self.q_prev = np.zeros(4)
+
+    q_prev : np.quaternion = None
+    def calc_q_feedback_control_torque(self, q_error: np.quaternion, w : np.array, M_inertia, H_wheels):
         # K = np.diag(np.full(3,self.k))
         # C = np.diag(self.c)
-        w = np.array(w)
         
-        q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(q_ref) # q_ref is already normalized
+        # q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(q_ref) # q_ref is already normalized
 
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
+
+        q_int = q_error + (self.q_prev * self.t_sample)
+        self.q_prev = q_int
+        q_int_vec = np.array([q_int.x, q_int.y, q_int.z])
         # Hnet = M_inertia@(w) + H_wheels
 
         # return + K@q_error_vec - C@w + my_utils.cross_product(w, Hnet)
 
-        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w
+        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w + self.config['controller']['ki']*q_int_vec
     
     h = 0
     sub_types = ["linear", "arctan", "Shen"]
@@ -98,7 +104,7 @@ class Controller:
     upsilon = None
     c_1 = None
     c_2 = None
-    def calc_backstepping_control_torque(self, q_curr: np.quaternion, w, satellite, E: np.array):
+    def calc_backstepping_control_torque(self, q_curr: np.quaternion, w, satellite, f_est: np.array):
         I1 = satellite.M_inertia[0][0]
         I2 = satellite.M_inertia[1][1]
         I3 = satellite.M_inertia[2][2]
@@ -142,7 +148,7 @@ class Controller:
         elif self.config["controller"]["sub_type"] == "Shen":
             u_max = self.config["wheels"]["max_torque"]
             D_plus = satellite.wheel_module.D_psuedo_inv
-            # eta_0 = np.linalg.norm(D_plus)
+            eta_0 = np.linalg.norm(D_plus)
 
             Omega = np.linalg.norm(w)**2 + np.linalg.norm(w) + 1
             s = w - self.alpha*np.arctan(self.beta*quaternion.as_vector_part(q_curr))
@@ -155,26 +161,28 @@ class Controller:
             self.h = self.h + h_dot*self.t_sample
 
             D = satellite.wheel_module.D
-            if True:
+            if False:
                 A = D_plus
                 B = np.atleast_2d(s).T
                 c = -1*(self.k + self.h*Omega/(s_norm + eta_2))
                 C = D_plus@np.atleast_2d(s).T * c
                 phi = -1 * (1 / (s_norm**2 + self.eta_1**2))
                 F = np.atleast_2d(s) @ D @ E * phi
-            
+
+
+                # test = u_max/(eta_0*Gamma)
+                # if(s_norm >= test):
+                #     u = (D_plus*u_max)@s/(s_norm*eta_0)
+                # else:
                 u = C + (F@C/(1 - F@A@B))*A@B
                 u = u.reshape(-1)
-            else:
-                if not satellite._fault.master_enable:
-                    f = np.ones(3)
-                else:
-                    f = -1*satellite.wheel_module.D@satellite._fault.mul_fault_matrix@self.u_wheels_prev
 
-                Gamma = self.k + s@f.reshape(-1,1)/(s_norm_pow2+self.eta_1**2) + self.h*Omega/(s_norm+eta_2)
+
+            else:
+                Gamma = self.k + s@f_est.reshape(-1,1)/(s_norm_pow2+self.eta_1**2) + self.h*Omega/(s_norm+eta_2)
                 test = u_max/(eta_0*Gamma)
                 if(s_norm >= test):
-                    u = (D_plus*u_max)@s/(s_norm*eta_0)
+                    u = -1*(D_plus*u_max)@s/(s_norm*eta_0)
                 else:
                     u = -1*Gamma*D_plus@s
             if(np.shape(u)[0] != satellite.wheel_module.num_wheels):
@@ -184,23 +192,24 @@ class Controller:
         return u
 
     next_t_sample : float = 0
-    def calc_torque_control_output(self, t, q_curr : np.quaternion,  w : list[float], q_ref : np.quaternion, satellite, w_wheels, E) -> np.array:
+    def calc_torque_control_output(self, t, q_curr : np.quaternion,  w_sat : np.array, q_ref : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:
         if t >= self.next_t_sample:
             self.next_t_sample += self.t_sample
         else:
             return self.u_vec_prev, self.u_wheels_prev
         
-        q_error = q_curr.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(q_ref)
+        # q_sat_error =  q_ref * q_curr.inverse()
+        q_sat_error =  q_curr.inverse() * q_ref
         H_wheels = satellite.wheel_module.D@w_wheels # @TODO check this!!!
         if self.type == "q_feedback":
-            u = self.calc_q_feedback_control_torque(q_curr, w, q_ref, satellite.M_inertia, H_wheels)
+            u = self.calc_q_feedback_control_torque(q_sat_error, w_sat, satellite.M_inertia, H_wheels)
             if self.type == "adaptive":
                 u = self.calc_adaptive_control_torque_output(u, q_curr, q_ref)
             u_vec = u
             u_wheels = satellite.wheel_module.D_psuedo_inv@u_vec
 
         elif self.type == "backstepping":
-            u = self.calc_backstepping_control_torque(q_error, w, satellite, E)
+            u = self.calc_backstepping_control_torque(q_sat_error, w_sat, satellite, f_est)
             u_wheels = u
             u_vec = satellite.wheel_module.D@u_wheels
         else:

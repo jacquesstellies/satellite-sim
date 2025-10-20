@@ -180,12 +180,7 @@ class ObserverModule():
             # Only update E if there was a control input
             if u_wheels[i] != 0:
                 E_mul_temp = (u_wheels[i] + self.f_wheels_est[i])/u_wheels[i]
-                E_mul_temp_prev = self.E_mul[i][i]
-                dE_prev = self.dE
-                self.dE = (E_mul_temp - E_mul_temp_prev)/self.t_sample
-                ddE = (self.dE - dE_prev)/self.t_sample
-                if np.abs(ddE) < 10 and E_mul_temp < 1 and E_mul_temp > 0:
-                    # self.E_mul[i][i] = my_utils.low_pass_filter(E_mul_temp, E_mul_temp_prev, 0.9)
+                if E_mul_temp < 1 and E_mul_temp > 0 and np.abs(u_wheels[i]) >1e-2:
                     self.E_mul[i][i] = E_mul_temp
 
         return self.E_mul

@@ -5,7 +5,7 @@ import my_globals
 
 from body import Body
 from controller import Controller
-from fault import Fault
+from fault import Fault, FaultModule
 from wheels import WheelModule
 from orbit import Disturbances
 from observer import ObserverModule
@@ -24,7 +24,11 @@ class Satellite(Body):
     controller : Controller = None
     observer_module : ObserverModule = None
     wheel_module : WheelModule = None
-    fault : Fault = None
+    fault_module : FaultModule = None
+    ref_q : Rotation = None
+    ref_T = np.zeros(3)
+    ref_q_series : list = None
+    ref_t_series : list = None
 
     dir_init = Rotation.from_quat([0,0,0,1])
 
@@ -33,7 +37,7 @@ class Satellite(Body):
 
     config = None
     def __init__(self, wheel_module : WheelModule, controller : Controller, observer_module : ObserverModule,
-                 fault : Fault, wheel_offset = 0, logger = None, logging_en=True,  config=None, results_data=None):
+                 fault_module : FaultModule, wheel_offset = 0, logger = None, logging_en=True,  config=None, results_data=None):
         self.config = config
         self.logging_en = logging_en
         self.wheel_module = wheel_module
@@ -50,14 +54,21 @@ class Satellite(Body):
         self.observer_module = observer_module
         self.next_logger_timestamp = controller.t_sample
         self._logger = logger
-        self.fault = fault
-        self. results_data = results_data
-        
+        self.fault_module = fault_module
+        self.results_data = results_data
+
+        for i in my_utils.q_axes:
+            self.results_data[f'q_sat_ref_{i}'] = []
+
         for i in range(wheel_module.num_wheels):
-            self.results_data['w_wheels_' + str(i)] = []
-            self.results_data['T_wheels_' + str(i)] = []
+            self.results_data[f'T_ctr_wheels_{i}'] = []
+
+            self.results_data[f'w_wheels_{i}'] = []
+            self.results_data[f'T_wheels_{i}'] = []
             self.results_data[f'E_{i}'] = []
-        
+            self.results_data[f'f_wheels_{i}'] = []
+            self.results_data[f'u_a_{i}'] = []
+
             self.results_data[f'w_wheels_est_{i}'] = []
             self.results_data[f'f_wheels_est_{i}'] = []
             self.results_data[f'dw_wheels_est_{i}'] = []
@@ -86,6 +97,27 @@ class Satellite(Body):
         self.T_ctr_vec = np.zeros(3)
         
         self.E = np.eye(self.wheel_module.num_wheels)
+        self.f_wheels = np.zeros(self.wheel_module.num_wheels)
+
+        # Control Variables
+        if config['satellite']['use_ref_euler'] + config['satellite']['use_ref_q'] + config['satellite']['use_ref_series'] != 1:
+            raise(Exception("exactly one of use_ref_euler, use_ref_q, use_ref_series must be true"))
+        
+        if config['satellite']['use_ref_euler']:
+            self.ref_q = Rotation.from_euler("xyz", config['satellite']['ref_euler'], degrees=True)
+        elif config['satellite']['use_ref_q']:
+            self.ref_q = Rotation.from_quat(config['satellite']['ref_q'])
+        elif config['satellite']['use_ref_series']:
+            t_series = config['satellite']['ref_t_series']
+            q_series = config['satellite']['ref_q_series']
+            if len(t_series) == len(q_series):
+                self.ref_q = Rotation.from_quat(q_series[0])
+                self.ref_q_series = Rotation.from_quat(q_series)
+                self.ref_t_series = t_series
+            else:
+                raise(Exception("ref_t_series and ref_q_series must be the same length"))
+        else:
+            raise(Exception("no reference angle commanded"))
         
     def calc_face_properties(self):
         dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
@@ -127,39 +159,55 @@ class Satellite(Body):
 
         self.calc_M_inertia_inv()
 
-    ref_q = Rotation.from_quat([0,0,0,1])
-    ref_T = np.zeros(3)
+    t_ref_update = 0
+    ref_q_series_index = 0
+    def update_ref_q(self, t):
+        if self.config['satellite']['use_ref_series'] is False:
+            return
+        if self.ref_q_series_index > len(self.ref_t_series)-1:
+            return
+        if t >= self.ref_t_series[self.ref_q_series_index]:
+            # print("updating ref q, t=", t, " next t=", self.ref_t_series[self.ref_q_series_index+1], " index=", self.ref_q_series_index)
+            self.ref_q = self.ref_q_series[self.ref_q_series_index]
+            self.ref_q_series_index += 1
+            print("new ref q=", self.ref_q.as_quat())
+
+
     wheels_control_enable = True
     next_logger_timestamp = 0.0
     T_ctr_vec = None
     E = None
+    f = None
+    f_wheels = None
     def calc_state_rates(self, t, y):
 
         w_sat_input = y[:3]
         q_sat_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
         w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
 
+        self.update_ref_q(t)
         ### Calculate controller output
         if self.controller.enable is True:
-            self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, q_sat_input, w_sat_input, self.ref_q, self, w_wheels_input, self.E)
+            if self.config['observer']['feedback_en']:
+                f_est = self.wheel_module.D@self.observer_module.f_wheels_est
+            else:
+                f_est = np.zeros(3)
+
+            self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, q_sat_input, w_sat_input, my_utils.conv_Rotation_obj_to_numpy_q(self.ref_q), self, w_wheels_input, f_est)
 
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
-
         
         if self.observer_module.enable is True:
             self.E = self.observer_module.calc_state_estimates(t, w_wheels_input, self.T_ctr_wheels)
+            self.f_wheels = self.observer_module.f_wheels_est
         else:
-            self.E = np.eye(self.wheel_module.num_wheels)
-
-
-
+            self.f_wheels = self.fault_module.E@self.T_ctr_wheels + self.fault_module.u_a
+            self.E = self.fault_module.E
         #### Calculate state rates for satellite various subsystems
 
         # T_aero = self.disturbances.calc_aero_torque(self, q_sat_input)
         # T_grav = self.disturbances.calc_grav_torque(self, q_sat_input)
         # T_dist = (T_aero + T_grav)
-
-        # if self.config['controller']['type'] == "adaptive" and self.config['controller']['sub_type'] == "Shen":
 
         T_dist = self.disturbances.calc_dist_torque_Shen(t)
 
@@ -172,7 +220,8 @@ class Satellite(Body):
         dq_result = 0.5*q_sat_input*inertial_v_q
         dq_result = [dq_result.x, dq_result.y, dq_result.z, dq_result.w]
         control_power_result = abs(self.wheel_module.dH_vec * w_sat_input) ## @TODO fix this
-        self.fault.update(t)
+        
+        self.fault_module.update(t)
 
         if self.logging_en:
             if t >= self.next_logger_timestamp:
@@ -181,18 +230,25 @@ class Satellite(Body):
 
                 # Collect results data for logging                    
                 for i, axis in enumerate(my_utils.xyz_axes):
-                    self.results_data['torque_'+ axis].append(self.T_ctr_vec[i])
-                    self.results_data['angular_acc_'+ axis].append(dw_sat_result[i])
+                    self.results_data['T_sat_'+ axis].append(self.T_ctr_vec[i])
+                    self.results_data['dw_sat_' + axis].append(dw_sat_result[i])
                     self.results_data['T_dist_' + axis].append(T_dist[i])
+                
+                for i, axis in enumerate(my_utils.q_axes):
+                    self.results_data['q_sat_ref_' + axis].append(self.ref_q.as_quat()[i])
 
                 for i, wheel in enumerate(self.wheel_module.wheels):
                     self.results_data['w_wheels_' + str(i)].append(self.wheel_module.w_wheels[i])
-                    self.results_data['T_wheels_' + str(i)].append(self.wheel_module.dw_wheels[i]*wheel.M_inertia_fast) # assuming wheel inertia is diagonal and only z component is used
                     self.results_data['w_wheels_est_' + str(i)].append(self.observer_module.w_wheels_est[i])
                     self.results_data['f_wheels_est_' + str(i)].append(self.observer_module.f_wheels_est[i])
+                    self.results_data['T_wheels_' + str(i)].append(self.wheel_module.dw_wheels[i]*wheel.M_inertia_fast) # assuming wheel inertia is diagonal and only z component is used
                     self.results_data['dw_wheels_est_' + str(i)].append(self.observer_module.dw_wheels_est[i])
-                    self.results_data['E_' + str(i)].append(self.fault.E[i][i])
-                    self.results_data['E_est_' + str(i)].append(self.observer_module.E_mul[i][i])
+                    self.results_data['T_ctr_wheels_' + str(i)].append(self.T_ctr_wheels[i])
+                    self.results_data['E_' + str(i)].append(self.fault_module.E[i][i])
+                    # self.results_data['E_est_' + str(i)].append(self.observer_module.E_mul[i][i])
+                    self.results_data['E_est_' + str(i)].append(self.E[i][i])
+                    self.results_data['f_wheels_' + str(i)].append(self.f_wheels[i])
+                    self.results_data['u_a_' + str(i)].append(self.fault_module.u_a[i])
 
                 self.next_logger_timestamp += self.controller.t_sample
 

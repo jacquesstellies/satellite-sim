@@ -2,13 +2,14 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 70
+duration = 150
 resolution = 0.1
 test_mode_en = false
 test_duration = 3
 test_resolution = 1
 iterations = 1
 tuning = false
+input_type="ref" # ref, ref_square, torque, sine, square
 
 [controller]
 enable = true
@@ -16,6 +17,7 @@ c = [ 1, 1, 1,]
 k = 2
 kj = 2
 kd = 4
+ki = 50
 T_max = 0.2
 T_min = 0
 filter_coef = 0
@@ -23,51 +25,78 @@ t_sample = 0.1
 type = "backstepping" # q_feedback, backstepping, adaptive
 sub_type = "Shen"
 adaptive_gain = 0.1
+detection_en = true
 
 [backstepping]
 alpha = 1 # makes peaks and troughs more pointy
-beta = 0.7 # similar to kd
-k = 5 # similar to kp
+beta = 1.8 # similar to kd
+k = 100 # similar to kp
 eta_1 = 0.1
 upsilon = 0.01
 c_1 = 0.01
 c_2 = 0.1
 
+# alpha = 1 # makes peaks and troughs more pointy
+# beta = 0.7 # similar to kd
+# k = 5 # similar to kp
+# eta_1 = 0.1
+# upsilon = 0.01
+# c_1 = 0.01
+# c_2 = 0.1
+
 [observer]
 enable = true
+feedback_en = true
 t_sample = 0.01
 gain = [ 3.00, 0.005, 0.000 ]
 
 [wheels]
-config = "custom"
+config = "pyramid" # tetra, ortho, pyramid, custom
 mass = 0.31
 radius = 0.066
 height = 0.025
 max_speed_rpm = 10000
 max_torque = 0.2
-num_wheels = 4
+num_wheels = 3
 D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
 friction_coef = 0.0001
 
-[fault]
-type = "catastrophic"
-torque_limit = 0.5
-filter_coef = 0.99
-wheel_num = 0
-mul_fault = [ 0.5, 1.0, 1.0, 1.0,]
-add_fault = [ 0, 0, 0, 0,]
-time = 0
+[faults]
 master_enable = true
-update_rate = 0.5
+
+[fault.0]
+mul_fault = [ 1.0, 1.0, 1.0, 0.0,]
+add_fault = [ 0.0, 0.0, 0.0, 0.0,]
+# mul_fault = [ 1.0, 1.0, 1.0,]
+# add_fault = [ 0, 0, 0,]
+time = 5
+master_enable = true
+
+[fault.1]
+mul_fault = [ 1.0, 1.0, 1.0, 1.0,]
+# add_fault = [ 0.0, -0.03, -0.04, 0.0,]
+add_fault = [ 0.0, 0.0, 0.0, 0.0,]
+# mul_fault = [ 1.0, 1.0, 1.0,]
+# add_fault = [ 0, 0, 0,]
+time = 100
+master_enable = true
 
 [satellite]
-euler_init_en = true
-euler_init = [ 60, 0, 0,]
-q_init = [ -0.5, 0.3, 0.4, 0.7071,]
+euler_init_en = false
+euler_init = [ 0, 0, 0,]
+# euler_init = [ 0, 0, 0,]
+# q_init = [ -0.5, 0.3, 0.4, 0.7071,]
+q_init = [ 0, 0, 0, 1,]
 use_ref_euler = false
-ref_euler = [ 0, 0, 5,]
-use_ref_q = true
+ref_euler = [ 45, 45, 45,]
+use_ref_q = false
 ref_q = [ 0, 0, 0, 1,]
+# ref_q = [ 0.12707253, -0.17409001,  0.12707253,  0.96819307]
+# ref_q = [ -0.9880316, 0.0, 0.0, 0.1542514 ]
+use_ref_series = true
+# ref_q_series = [[ 0.4871745, 0.0, 0.0, 0.8733046,], [ 0.0, 0.0, 0.0, 1.0 ]]
+ref_q_series = [[ 0.12707253, -0.17409001,  0.12707253,  0.96819307], [ 0.0, 0.0, 0.0, 1.0 ]]
+ref_t_series=[ 0, 30,]
 wheels_control_enable = true
 mass = 12
 M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]

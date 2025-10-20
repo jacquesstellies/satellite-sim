@@ -22,23 +22,28 @@ class Wheel():
     config = None
     index = 0
 
-    _fault : Fault = None 
+    _faults : list[Fault] = None 
     w_max = 0
     T_max = 0
+
+    w : float = 0.0
+    dw : float = 0.0
+    H : float = 0.0
+    dH : float = 0.0
 
     controller_enable = True
     t_sample = None
 
     _noise_std = 0
 
-    def __init__(self, config, fault, index=0):
+    def __init__(self, config, faults, index=0):
         self.config = config
         self.mass = self.config['wheels']['mass']
         self.dimensions['radius'] = self.config['wheels']['radius']
         self.dimensions['height'] = self.config['wheels']['height']
         self.w_max = my_utils.conv_rpm_to_rads_per_sec(self.config['wheels']['max_speed_rpm'])
         self.T_max = self.config['wheels']['max_torque']
-        self._fault = fault
+        self._faults = faults
         self.index = index
         self.t_sample = self.config['controller']['t_sample']
         self.friction_coef = self.config['wheels']['friction_coef']
@@ -48,10 +53,6 @@ class Wheel():
         target_noise_watts = 10 ** (target_noise_db / 10)
         self._noise_std = math.sqrt(target_noise_watts)
     
-        w = 0.0
-        dw = 0.0
-        H = 0.0
-        dH = 0.0
     def calc_M_inertia(self):
         # Moment of inertia
         self.M_inertia[0][0] = 0.25*self.mass*pow(self.dimensions['radius'],2) + (1/12)*self.mass*pow(self.dimensions['height'],2)
@@ -63,22 +64,25 @@ class Wheel():
         self.M_inertia_inv_fast = self.M_inertia_inv[2][2]  # For fast calculations, we only need the z-axis inertia
 
 
-    def calc_state_rates(self, t, state, u):
+    def calc_state_rates(self, t : float, state : float, u : float):
         self.w = state
-        # print(f"wheel {self.index} state: {state}, torque input: {u}, t = {t}")
         # Set fault torque limit
         T_limit = self.T_max
     
+        # Apply fault if enabled (self updated in fault class)
+        for fault in self._faults:
+            u *= fault.E[self.index][self.index]
+            u += fault.u_a[self.index]
+
         # Check torque limit exceeded
         if abs(u) >= T_limit:
             u = T_limit*my_utils._sign(u)
 
-        # Apply fault if enabled (self updated in fault class)
-        u = self._fault.E[self.index][self.index] * u
             
         # Calculate the new wheel speed derivative
         self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
-
+        # self.dw = u*self.M_inertia_inv_fast
+        
         if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
             self.dw = 0
         
@@ -128,7 +132,7 @@ class WheelModule():
     _D_psuedo_inv_local = None
     num_wheels = 0
     
-    def __init__(self, config,fault=None):
+    def __init__(self, config,faults=None):
         self.layout = config['wheels']['config']
         self.config = config
         if self.layout == "ortho":
@@ -136,18 +140,13 @@ class WheelModule():
             self.D = np.eye(3)
         elif self.layout == "pyramid":
             self.num_wheels = 4
-            beta = np.radians(30)
-            self.D = np.array([cos(beta)*np.array([1.0,0.0,-1.0,0.0]),
-                            cos(beta)*np.array([0.0,1.0,0.0,-1.0]),
-                            sin(beta)*np.array([1.0,1.0,1.0,1.0])])
+            self.D = np.array([ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],])
 
-        elif self.layout ==  "tetrahedron":
+        elif self.layout ==  "tetra":
             self.num_wheels = 4
             self.D = np.array([[0.9428,-0.4714,-0.4714,0],
                             [0,0.8165,-0.8165,0],
-                            [-0.3333,-0.3333,-0.3333,1]]) 
-            # elif len(wheels) == 1:
-            #     self.wheels[0].position[0] = self.dimensions[wheel_axes]-wheel_offset
+                            [-0.3333,-0.3333,-0.3333,1]])
         elif self.layout == "custom":
             self.num_wheels = config['wheels']['num_wheels']
             self.D = np.array(config['wheels']['D'])
@@ -156,7 +155,7 @@ class WheelModule():
         else:
             raise(Exception(f"{self.layout} is not a valid wheel layout. \nerror unable to set up wheel layout"))
         
-        self.wheels = [Wheel(config,fault,i) for wheel, i in enumerate(range(self.num_wheels))]
+        self.wheels = [Wheel(config,faults,i) for wheel, i in enumerate(range(self.num_wheels))]
         for i, wheel in enumerate(self.wheels):
             wheel.w_max = my_utils.conv_rpm_to_rads_per_sec(config['wheels']['max_speed_rpm'])
             wheel.T_max = config['wheels']['max_torque']

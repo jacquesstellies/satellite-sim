@@ -1,7 +1,7 @@
 from observer import WheelExtendedStateObserver, ObserverModule
 from satellite import Satellite
 from controller import Controller
-from fault import Fault
+from fault import Fault, FaultModule
 from wheels import WheelModule
 
 import my_utils
@@ -59,7 +59,7 @@ def create_default_log_file_name(config):
     
     filename += '_' + config['wheels']['config']
     
-    if config['fault']['master_enable']:
+    if config['faults']['master_enable']:
         filename += '_fault'
     else:
         filename += '_nom'
@@ -141,9 +141,10 @@ class Simulation:
         self.config = config
         self.results_data = results_data
 
-        fault = Fault(config)
+        self.fault_module = FaultModule(config)
+        
 
-        wheel_module = WheelModule(config, fault)
+        wheel_module = WheelModule(config, self.fault_module.faults)
         if config['satellite']['euler_init_en']:
             dir_init = Rotation.from_euler('xyz',config['satellite']['euler_init'],degrees=True)
         else:
@@ -151,11 +152,13 @@ class Simulation:
 
         w_sat_init = np.array([0,0,0])
 
-        controller = Controller(fault=fault, wheel_module=wheel_module, results_data=results_data, w_sat_init=np.zeros(3), q_sat_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
+        controller = Controller(faults=self.fault_module.faults, wheel_module=wheel_module, results_data=results_data, w_sat_init=np.zeros(3), q_sat_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
                                     config=config)
         observer_module = ObserverModule(config, results_data, wheel_module)
 
-        self.satellite = Satellite(wheel_module, controller, observer_module, fault, config=config, results_data=results_data, logging_en=logging_en)
+        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, config=config, results_data=results_data, logging_en=logging_en)
+
+        self.fault_module.init(wheel_module.num_wheels)
 
         # Satellite Initial Conditions
         self.satellite.dir_init = dir_init
@@ -163,14 +166,6 @@ class Simulation:
         # Adaptive Controller Initialize
         self.satellite.controller.M_inertia_inv_model = self.satellite.M_inertia_inv
         self.satellite.controller.q_prev = my_utils.conv_Rotation_obj_to_numpy_q(self.satellite.dir_init)
-
-        # Control Variables
-        if config['satellite']['use_ref_euler']:
-            self.satellite.ref_q = Rotation.from_euler("xyz", config['satellite']['ref_euler'], degrees=True)
-        elif config['satellite']['use_ref_q']:
-            self.satellite.ref_q = Rotation.from_quat(config['satellite']['ref_q'])
-        else:
-            raise(Exception("no reference angle commanded"))
 
         q_sat_init = self.satellite.dir_init.as_quat()
         control_torque_init = np.zeros(3)
@@ -215,10 +210,10 @@ class Simulation:
     def collect_results(self, sol):
         
         for i,axis in enumerate(my_utils.xyz_axes):
-            self.results_data[f'angular_rate_{axis}'] = interpolate_data(sol.y[i], sol.t, self.sim_time_series)
+            self.results_data[f'w_sat_{axis}'] = interpolate_data(sol.y[i], sol.t, self.sim_time_series)
 
         for i,axis in enumerate(my_utils.q_axes):
-            self.results_data[f'quaternion_{axis}'] = interpolate_data(sol.y[i+3], sol.t, self.sim_time_series)
+            self.results_data[f'q_sat_{axis}'] = interpolate_data(sol.y[i+3], sol.t, self.sim_time_series)
         
         for i,axis in enumerate(my_utils.xyz_axes):
             self.results_data[f'control_energy_{axis}'] = interpolate_data(sol.y[i+7], sol.t, self.sim_time_series)
@@ -229,6 +224,7 @@ class Simulation:
                 continue
             if len(value) == len(self.results_data['time']):
                 self.results_data[key] = interpolate_data(value, self.results_data['time'], self.sim_time_series)[:]
+            
         for key, value in self.results_data.items():
             if len(value) != len(self.sim_time_series):
                 print(f"Warning: {key} has length {len(value)} but time has length {len(self.sim_time_series)}")
@@ -241,30 +237,40 @@ class Simulation:
         for i, wheel in enumerate(self.satellite.wheel_module.wheels):
             self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
             # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
-
-        # self.results_df['euler_axis'] = 
-        # r_1 : Rotation = Rotation.from_quat([self.results_data['quaternion_x'],
-        #                                     self.results_data['quaternion_y'],
-        #                                     self.results_data['quaternion_z'],
-        #                                     self.results_data['quaternion_w']])
-        self.results_data['euler_axis'] = []
-        for row in range(len(self.results_data['time'])):
-            r_1 : Rotation = Rotation.from_quat([self.results_data['quaternion_x'][row],
-                                            self.results_data['quaternion_y'][row],
-                                            self.results_data['quaternion_z'][row],
-                                            self.results_data['quaternion_w'][row]])
-            alpha = my_utils.conv_Rotation_obj_to_euler_axis_angle(r_1)
-            self.results_data['euler_axis'].append(alpha)
         
-        self.results_data['euler_int'] = cumulative_trapezoid(self.results_data['euler_axis'], self.results_data['time'], initial=0)
 
-        q = np.array([self.results_data["quaternion_x"], 
-                                            self.results_data["quaternion_y"], 
-                                            self.results_data["quaternion_z"], 
-                                            self.results_data["quaternion_w"]])
-        r =  Rotation.from_quat(quat=q.T)
-        [self.results_data['euler_yaw'],self.results_data['euler_pitch'], self.results_data['euler_roll']] = r.as_euler('zyx', degrees=True).T
+        self.results_df = pd.DataFrame.from_dict(self.results_data)
+
+        self.results_df['euler_axis_sat'] = self.results_df['q_sat_w'].apply(lambda w: 2*np.arccos(w))
+        self.results_df['euler_axis_sat_deg'] = self.results_df['euler_axis_sat']*180/np.pi
+
+        self.results_df['euler_int'] = cumulative_trapezoid(self.results_df['euler_axis_sat'], self.results_df['time'], initial=0)
         
+        # Quaternion to Principal Angle Error
+        q_sat = np.array([self.results_data["q_sat_x"], 
+                        self.results_data["q_sat_y"], 
+                        self.results_data["q_sat_z"], 
+                        self.results_data["q_sat_w"]])
+        r_sat =  Rotation.from_quat(quat=q_sat.T)
+        [self.results_df['e_sat_yaw'],self.results_df['e_sat_pitch'], self.results_df['e_sat_roll']] = r_sat.as_euler('zyx', degrees=True).T
+
+        q_sat_ref = np.array([self.results_df["q_sat_ref_x"],
+                              self.results_df["q_sat_ref_y"],
+                              self.results_df["q_sat_ref_z"],
+                              self.results_df["q_sat_ref_w"]])
+        r_sat_ref = Rotation.from_quat(q_sat_ref.T)
+        # self.results_df['euler_axis_sat_ref'] = my_utils.conv_Rotation_obj_to_euler_axis_angle(r_sat_ref)
+
+        r_sat_error = r_sat_ref * r_sat.inv()
+
+        # print("Final Quaternion Error (satellite to reference): ", r_sat_error.as_quat().T)
+        [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = r_sat_error.as_quat().T
+        self.results_df['euler_axis_sat_error'] = self.results_df['q_sat_error_w'].apply(lambda w: 2*np.arccos(w))
+        self.results_df['euler_axis_sat_error_deg'] = self.results_df['euler_axis_sat_error'] * 180 / np.pi
+
+        for i, wheel in enumerate(self.satellite.wheel_module.wheels):
+            self.results_df[f'f_wheels_error_{i}'] = self.results_df[f'f_wheels_{i}'] - self.results_df[f'f_wheels_est_{i}']
+
         for i,axis in enumerate(my_utils.xyz_axes):
             if self.config['output']['energy_enable']:
                 self.calc_control_energy_output_results(self.results_data['control_energy_{}'.format(axis)])
@@ -272,7 +278,6 @@ class Simulation:
         if self.config['output']['accuracy_enable']:
             self.calc_accuracy_output_results()
         
-        self.results_df = pd.DataFrame.from_dict(self.results_data)
     
     control_energy_log_output = ""
     def calc_control_energy_output_results(self, control_energy_arr):
@@ -292,43 +297,41 @@ class Simulation:
 
     def calc_accuracy_output_results(self):
         try:
-            euler_axis_init = my_utils.conv_Rotation_obj_to_euler_axis_angle(self.satellite.dir_init)
-            euler_axis_ref = my_utils.conv_Rotation_obj_to_euler_axis_angle(self.satellite.ref_q)
-            control_info = control.step_info(sysdata=self.results_data[f"euler_int"], 
+            control_info = control.step_info(sysdata=self.results_df[f"euler_axis_sat_deg"], 
                                             SettlingTimeThreshold=0.002, T=self.results_data['time'])
             self.steady_state = control_info['SteadyStateValue']
 
-            control_info_euler_axis = control.step_info(sysdata=self.results_data['euler_axis'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
-            
-            self.steady_state_euler_axis = control_info_euler_axis['SteadyStateValue']
-            print(f"steady state error euler angle about pricipal axis: {self.steady_state_euler_axis} deg")
-            self.accuracy = 1-np.abs((self.results_data[f"euler_axis"][-1]-euler_axis_ref)/(euler_axis_ref-euler_axis_init))
+            q_final = [self.results_data[f'q_sat_{axis}'][-1] for axis in my_utils.q_axes]
+            q_error = my_utils.conv_Rotation_obj_to_numpy_q(self.satellite.ref_q)*np.quaternion(q_final[3], q_final[0], q_final[1], q_final[2]).inverse()
+            prin_error = my_utils.get_principal_angle_from_np_quaternion(q_error)
             self.settling_time = control_info['SettlingTime']
             
+            final_euler  = Rotation.from_quat(q_final).as_euler('xyz', degrees=True)
+            euler_error = Rotation.from_quat([q_error.x, q_error.y, q_error.z, q_error.w]).as_euler('xyz', degrees=True)
+
+            print(f"final euler: {final_euler} deg xyz")
+            print(f"euler error: {euler_error} deg xyz")
+            print(f"principal angle error: {prin_error*180/np.pi} deg")
+            print(f"steady state value: {self.steady_state} deg")
+
+            if self.config['satellite']['use_ref_series'] is True:
+                return
+
             if self.settling_time >= (self.sim_time - 1):
-                self.accuracy = 0
                 self.settling_time = None
                 raise Exception("Settling time is greater than simulation time")
 
-            self.accuracy_percent = self.accuracy*100
             
-            final_q = [self.results_data[f'quaternion_{axis}'][-1] for axis in my_utils.q_axes]
-            final_euler  = Rotation.from_quat(final_q).as_euler('xyz', degrees=True)
             if self.monte_carlo == False:
-                print(f"accuracy %: {self.accuracy_percent}")
                 print(f"settling_time (s): {round(self.settling_time,3)}")
                 print(f"steady_state (s): {round(self.steady_state,3)}")
-            print(f"final euler: {final_euler} deg xyz")
-            print(f"euler error: {euler_axis_ref - final_euler} deg xyz")
 
-            control_info_y = control.step_info(sysdata=self.results_data['euler_yaw'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
-            control_info_p = control.step_info(sysdata=self.results_data['euler_pitch'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
-            control_info_r = control.step_info(sysdata=self.results_data['euler_roll'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
-            if self.monte_carlo == False:
-                print(f"accuracy %: {self.accuracy_percent}")
-                print(f"settling_time (s): {round(self.settling_time,3)}")
-                print(f"steady_state (s): {round(self.steady_state,3)}")
-            print(f"steady state error: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
+
+            control_info_y = control.step_info(sysdata=self.results_df['e_sat_yaw'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
+            control_info_p = control.step_info(sysdata=self.results_df['e_sat_pitch'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
+            control_info_r = control.step_info(sysdata=self.results_df['e_sat_roll'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
+
+            print(f"steady state value: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
         except Exception as e:
             print(f"Error calculating accuracy: {e}")
 
@@ -336,7 +339,9 @@ class Simulation:
         if LOG_FILE_NAME != None and test_mode_en is False:
             LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
             # clear_log_file(fr"{LOG_FOLDER_PATH}/{LOG_FILE_NAME_RESULTS}")
-            output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", self.results_data)
+            # output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", self.results_data)
+            with open(fr'{LOG_FOLDER_PATH}/{LOG_FILE_NAME + "_log"}.csv', 'w+') as file:
+                self.results_df.to_csv(file,sep=',')
             output_toml_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME + "_config", self.config)
             if self.accuracy_percent is not None:
                 log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"accuracy %: {self.accuracy_percent}", False)
@@ -355,14 +360,13 @@ class Simulation:
             for axis in axes:
                 if axis != 'none':
                     name = row_name + "_" + axis
-                    # print(f"displaying plot of {name}")
                 else:
                     axis = None
                     name = row_name
-                # try:
-                ax_separate.plot(results_data['time'], results_data[name], label=axis)
-                # except Exception as e:
-                    # print(f"Error plotting {name}: {e}")
+                try:
+                    ax_separate.plot(results_data['time'], results_data[name], label=axis)
+                except Exception as e:
+                    print(f"Error plotting {name}: {e}")
 
             
             ax_separate.set_xlabel('time (s)')
@@ -387,15 +391,15 @@ class Simulation:
             for axis_idx, axis in enumerate(axes):
                 if axis != 'none':
                     name = row_name + "_" + axis
-                    # print(f"displaying plot of {name}")
                 else:
                     axis = None
                     name = row_name
                 try:
-                    ax.plot(results_data['time'], results_data[name], label=axis, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
+                    ax.plot(results_data['time'], results_data[name], label=row_name, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
                     
                 except Exception as e:
                     print(f"Error plotting {name}: {e}")
+        ax.legend(loc='upper right')
         if show is True or config['output']['show_plots'] is True:
             try:
                 plt.show()
@@ -488,13 +492,13 @@ def main():
     results_data = {}
     results_data["time"] = []
     for axis in my_utils.xyz_axes:
-        results_data["torque_" + axis] = []
-        results_data["angular_acc_" + axis] = []
-        results_data["angular_rate_" + axis] = []
+        results_data["T_sat_" + axis] = []
+        results_data["dw_sat_" + axis] = []
+        results_data["w_sat_" + axis] = []
         results_data['T_dist_' + axis] = []
     for axis in my_utils.q_axes:
-        results_data["quaternion_" + axis] = []
-    
+        results_data["q_sat_" + axis] = []
+
     simulation = Simulation(config, results_data)
     satellite = simulation.satellite
     wheel_module = satellite.wheel_module
@@ -589,12 +593,12 @@ def main():
             print("Simulation Complete")
             cols = 2
             ## Row should be in the form of (row_name, [axes], label)
-            rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular velocity (rad/s)'), \
-                    ('quaternion',my_utils.q_axes, 'Quaternion'), \
+            rows = [ ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)'), \
+                    ('q_sat',my_utils.q_axes, 'Quaternion'), \
                     ('euler_int',['none'], 'Euler integral (deg)'), \
                     ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
-                    ('torque',my_utils.xyz_axes, 'Torque (Nm)'), \
-                    ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), \
+                    ('T_sat',my_utils.xyz_axes, 'Torque (Nm)'), \
+                    ('ctr_energy',my_utils.xyz_axes, 'Control Energy (J)'), \
                     ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (Nm)')]
 
             if satellite.wheels_control_enable:
@@ -629,8 +633,14 @@ def main():
 
                 ## Row should be in the form of (row_name, [axes], label)
                 cols = 2
-                rows = [ ('angular_rate',my_utils.xyz_axes, 'Angular velocity (rad/s)'), ('quaternion',my_utils.q_axes, 'Quaternion'), ('euler_int',['none'], 'Euler integral (deg)'), ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
-                        ('torque',my_utils.xyz_axes, 'Torque (N)'), ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')]
+                rows = [ ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)'), 
+                        ('q_sat',my_utils.q_axes, 'Quaternion'), 
+                        ('e_sat', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
+                        ('euler_axis_sat_deg', ['none'], 'Euler Angle about Principal Axis (deg)'),
+                        ('T_sat',my_utils.xyz_axes, 'Torque (N)'), 
+                        ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), 
+                        ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')
+                        ]
                 
 
                 rows_2 = []
@@ -639,26 +649,40 @@ def main():
                     rows_2.append(('T_wheels', _axes, 'Wheel Torque (Nm)'))
                     rows_2.append(('w_wheels', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
                     rows_2.append(('E', _axes, 'Actuator Authority Estimate (Fraction)'))
+                    rows_2.append(('f_wheels', _axes, 'Disturbance Torque (Nm)'))
+                    rows_2.append(('u_a', _axes, 'Additive Fault (Nm)'))
 
                     rows_2.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
                     rows_2.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
                     rows_2.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
+                    rows_2.append(('f_wheels_error', _axes, 'Disturbance Torque Error (Nm)'))
                     rows_2.append(('E_est', _axes, 'Actuator Authority Estimate (Fraction)'))
+                    
                 if controller.type == "adaptive":
                     rows.append(('control_adaptive_model_output',['none']))
                     rows.append(('control_theta',my_utils.xyz_axes))
                 
-                simulation.create_plots_separated(rows, results_data, config, LOG_FILE_NAME)
-                simulation.create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME)
+                rows_2.append(('q_sat_ref', my_utils.q_axes, 'Reference Quaternion'))
+                rows_2.append(('q_sat_error', my_utils.q_axes, 'Quaternion Error (satellite to reference)'))
+                rows_2.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
+                # rows_2.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
+                
+                simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
+                simulation.create_plots_combined(rows, cols, simulation.results_df, config, LOG_FILE_NAME)
 
-                simulation.create_plots_separated(rows_2, results_data, config, LOG_FILE_NAME)
+                simulation.create_plots_separated(rows_2, simulation.results_df, config, LOG_FILE_NAME)
 
                 simulation.create_plots_comparison([('w_wheels', _axes),
                                     ('w_wheels_est', _axes)
-                                    ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', results_data, config, LOG_FILE_NAME, show=False)
+                                    ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
                 simulation.create_plots_comparison([('T_wheels', _axes),
                                     ('T_wheels_est', _axes)
-                                    ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', results_data, config, LOG_FILE_NAME, show=False)
+                                    ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                simulation.create_plots_comparison([('E', _axes), ('E_est', _axes)
+                                    ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+
+                simulation.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
+            
             #-------------------------------------------------------------#
             ###################### Monte Carlo ############################
             elif sim_iter > 1:
