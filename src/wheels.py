@@ -75,16 +75,17 @@ class Wheel():
             u += fault.u_a[self.index]
 
         # Check torque limit exceeded
-        if abs(u) >= T_limit:
-            u = T_limit*my_utils._sign(u)
+        # if abs(u) >= T_limit:
+        #     u = T_limit*my_utils._sign(u)
 
             
         # Calculate the new wheel speed derivative
-        self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
-        # self.dw = u*self.M_inertia_inv_fast
+        # self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
+        self.dw = u*self.M_inertia_inv_fast
         
-        if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
-            self.dw = 0
+        # if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
+        #     print("wheel speed limit reached")
+        #     self.dw = 0
         
         self.dH = self.dw*self.M_inertia_fast
         self.H = self.w*self.M_inertia_fast

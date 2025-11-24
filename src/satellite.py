@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
+from magt import MagtModule
 import my_utils as my_utils
 import my_globals
 
@@ -25,6 +26,7 @@ class Satellite(Body):
     observer_module : ObserverModule = None
     wheel_module : WheelModule = None
     fault_module : FaultModule = None
+    magt_module : MagtModule = None
     ref_q : Rotation = None
     ref_T = np.zeros(3)
     ref_q_series : list = None
@@ -37,7 +39,7 @@ class Satellite(Body):
 
     config = None
     def __init__(self, wheel_module : WheelModule, controller : Controller, observer_module : ObserverModule,
-                 fault_module : FaultModule, wheel_offset = 0, logger = None, logging_en=True,  config=None, results_data=None):
+                 fault_module : FaultModule, magt_module : MagtModule, wheel_offset = 0, logger = None, logging_en=True,  config=None, results_data=None):
         self.config = config
         self.logging_en = logging_en
         self.wheel_module = wheel_module
@@ -54,6 +56,8 @@ class Satellite(Body):
         self.observer_module = observer_module
         self.next_logger_timestamp = controller.t_sample
         self._logger = logger
+        self.magt_module = magt_module
+
         self.fault_module = fault_module
         self.results_data = results_data
 
@@ -73,6 +77,9 @@ class Satellite(Body):
             self.results_data[f'f_wheels_est_{i}'] = []
             self.results_data[f'dw_wheels_est_{i}'] = []
             self.results_data[f'E_est_{i}'] = []
+        
+        for i in my_utils.xyz_axes:
+            self.results_data[f'T_magt_{i}'] = []
         
         self.dimensions, self.mass = config['satellite']['dimensions'], config['satellite']['mass']
 
@@ -118,6 +125,8 @@ class Satellite(Body):
                 raise(Exception("ref_t_series and ref_q_series must be the same length"))
         else:
             raise(Exception("no reference angle commanded"))
+        
+
         
     def calc_face_properties(self):
         dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
@@ -195,6 +204,9 @@ class Satellite(Body):
 
             self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, q_sat_input, w_sat_input, my_utils.conv_Rotation_obj_to_numpy_q(self.ref_q), self, w_wheels_input, f_est)
 
+        if self.magt_module.enable is True:
+            T_magt = self.magt_module.calc_torque(w_sat_input, self.wheel_module.H_vec)
+
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
         if self.observer_module.enable is True:
@@ -209,10 +221,11 @@ class Satellite(Body):
         # T_grav = self.disturbances.calc_grav_torque(self, q_sat_input)
         # T_dist = (T_aero + T_grav)
 
-        T_dist = self.disturbances.calc_dist_torque_Shen(t)
+        # T_dist = self.disturbances.calc_dist_torque_Shen(t)
+        T_dist = np.zeros(3)
 
         Hnet = self.M_inertia@(w_sat_input) + self.wheel_module.H_vec
-        dw_sat_result = self.M_inertia_inv@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product(w_sat_input,Hnet))
+        dw_sat_result = self.M_inertia_inv@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product(w_sat_input,Hnet)) + T_magt
 
         #### Calculate the new satellite body state rates
         inertial_v_q = np.quaternion(0, w_sat_input[0], w_sat_input[1], w_sat_input[2]) # put the inertial velocity in q form
@@ -233,6 +246,7 @@ class Satellite(Body):
                     self.results_data['T_sat_'+ axis].append(self.T_ctr_vec[i])
                     self.results_data['dw_sat_' + axis].append(dw_sat_result[i])
                     self.results_data['T_dist_' + axis].append(T_dist[i])
+                    self.results_data['T_magt_' + axis].append(T_magt[i])
                 
                 for i, axis in enumerate(my_utils.q_axes):
                     self.results_data['q_sat_ref_' + axis].append(self.ref_q.as_quat()[i])

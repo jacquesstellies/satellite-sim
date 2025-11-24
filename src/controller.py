@@ -1,9 +1,10 @@
 import numpy as np
-from numpy import cos, sin, tan, arccos, arcsin, arctan
+from numpy import cos, diag, sin, tan, arccos, arcsin, arctan
 import quaternion
 import my_utils as my_utils
 from fault import Fault
 import observer
+from scipy.spatial.transform import Rotation as R
 
 class Controller:
     enable : bool = True
@@ -75,6 +76,8 @@ class Controller:
 
         self.q_prev = np.zeros(4)
 
+        self.sub_type = config['controller']['sub_type']
+
     q_prev : np.quaternion = None
     def calc_q_feedback_control_torque(self, q_error: np.quaternion, w : np.array, M_inertia, H_wheels):
         # K = np.diag(np.full(3,self.k))
@@ -94,7 +97,8 @@ class Controller:
         return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w + self.config['controller']['ki']*q_int_vec
     
     h = 0
-    sub_types = ["linear", "arctan", "Shen"]
+    sub_types = ["linear", "arctan", "Shen", "Nafadi"]
+    sub_type = None
 
     # Shen variables
     alpha = None
@@ -104,7 +108,11 @@ class Controller:
     upsilon = None
     c_1 = None
     c_2 = None
-    def calc_backstepping_control_torque(self, q_curr: np.quaternion, w, satellite, f_est: np.array):
+
+    v_0_prev = np.zeros(2)
+    chi_0_prev = np.zeros(2)
+    chi_1_prev = np.zeros(2)
+    def calc_backstepping_control_torque(self, q_err: np.quaternion, w, satellite, f_est: np.array):
         I1 = satellite.M_inertia[0][0]
         I2 = satellite.M_inertia[1][1]
         I3 = satellite.M_inertia[2][2]
@@ -113,19 +121,19 @@ class Controller:
         p3 = (I1 - I2)/I3
         alpha = 0.75
         beta = 8
-        sub_type = self.config["controller"]["sub_type"]
+        
         u = np.zeros(3)
-        if sub_type not in self.sub_types:
-            raise Exception(f"sub_type {sub_type} is not a valid sub_type")
-        if self.config["controller"]["sub_type"] == "linear":
+        if self.sub_type not in self.sub_types:
+            raise Exception(f"sub_type {self.sub_type} is not a valid sub_type")
+        if self.sub_type == "linear":
             s = 1
             g = 10
-            e = w - s*quaternion.as_vector_part(q_curr)
-            u1 = -1/2*q_curr.x-p1*w[1]*w[2] - s*0.5*(q_curr.w*w[0]+q_curr.y*w[2]-q_curr.z*w[1]) \
+            e = w - s*quaternion.as_vector_part(q_err)
+            u1 = -1/2*q_err.x-p1*w[1]*w[2] - s*0.5*(q_err.w*w[0]+q_err.y*w[2]-q_err.z*w[1]) \
                 - g*(e[0])
-            u2 = -1/2*q_curr.y-p2*w[0]*w[2] - s*0.5*(q_curr.w*w[1]+q_curr.z*w[0]-q_curr.x*w[2]) \
+            u2 = -1/2*q_err.y-p2*w[0]*w[2] - s*0.5*(q_err.w*w[1]+q_err.z*w[0]-q_err.x*w[2]) \
                 - g*(e[1])
-            u3 = -1/2*q_curr.z-p3*w[0]*w[1] - s*0.5*(q_curr.w*w[2]+q_curr.x*w[1]-q_curr.y*w[0]) \
+            u3 = -1/2*q_err.z-p3*w[0]*w[1] - s*0.5*(q_err.w*w[2]+q_err.x*w[1]-q_err.y*w[0]) \
                 - g*(e[2])
             u = np.array([u1, u2, u3])
         elif self.config["controller"]["sub_type"] == "arctan":
@@ -136,14 +144,14 @@ class Controller:
         #     s = 1
         #     g = 10
 
-        #     phi = alpha*np.arctan(beta*quaternion.as_vector_part(q_curr))
-        #     phi_dot = alpha*beta/(1+np.power(beta*quaternion.as_vector_part(q_curr),2))
+        #     phi = alpha*np.arctan(beta*quaternion.as_vector_part(q_err))
+        #     phi_dot = alpha*beta/(1+np.power(beta*quaternion.as_vector_part(q_err),2))
         #     e = w - s*phi
-        #     u1 = -1/2*q_curr.x-p1*w[1]*w[2] - s*0.5*phi_dot*(q_curr.w*w[0]+q_curr.y*w[2]-q_curr.z*w[1]) \
+        #     u1 = -1/2*q_err.x-p1*w[1]*w[2] - s*0.5*phi_dot*(q_err.w*w[0]+q_err.y*w[2]-q_err.z*w[1]) \
         #         - g*(e[0])
-        #     u2 = -1/2*q_curr.y-p2*w[0]*w[2] - s*0.5*phi_dot*(q_curr.w*w[1]+q_curr.z*w[0]-q_curr.x*w[2]) \
+        #     u2 = -1/2*q_err.y-p2*w[0]*w[2] - s*0.5*phi_dot*(q_err.w*w[1]+q_err.z*w[0]-q_err.x*w[2]) \
         #         - g*(e[1])
-        #     u3 = -1/2*q_curr.z-p3*w[0]*w[1] - s*0.5*phi_dot*(q_curr.w*w[2]+q_curr.x*w[1]-q_curr.y*w[0]) \
+        #     u3 = -1/2*q_err.z-p3*w[0]*w[1] - s*0.5*phi_dot*(q_err.w*w[2]+q_err.x*w[1]-q_err.y*w[0]) \
         #         - g*(e[2])
         elif self.config["controller"]["sub_type"] == "Shen":
             u_max = self.config["wheels"]["max_torque"]
@@ -151,7 +159,7 @@ class Controller:
             eta_0 = np.linalg.norm(D_plus)
 
             Omega = np.linalg.norm(w)**2 + np.linalg.norm(w) + 1
-            s = w - self.alpha*np.arctan(self.beta*quaternion.as_vector_part(q_curr))
+            s = w - self.alpha*np.arctan(self.beta*quaternion.as_vector_part(q_err))
             s_norm = np.linalg.norm(s)
             s_norm_pow2 = s_norm**2
             eta_2 = self.upsilon/Omega
@@ -188,6 +196,66 @@ class Controller:
             if(np.shape(u)[0] != satellite.wheel_module.num_wheels):
                 raise(Exception("invalid shape of u"))
                 
+        elif self.config["controller"]["sub_type"] == "Nafadi":
+            Gamma_z =  1.5*np.array([[1, 0], [0, 0.8]])
+            L = 10*np.eye(2)
+            k_0 = 0.1
+            k = 0.15
+            alpha_1 = 0.2
+            alpha_2 = 0.5
+            # Lambda = np.diag([3,3,6])
+            Lambda = np.diag([10,10,10])
+            lambda_1 = Lambda[0,0]
+            lambda_2 = Lambda[1,1]
+            lambda_3 = Lambda[2,2]
+            J_0 = satellite.M_inertia
+            a = Lambda[1,1] - Lambda[2,2]
+            b = Lambda[2,2] - Lambda[0,0]
+
+            f_idx = 2 # fault index
+            nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
+
+            C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+            C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+
+            Aq = np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
+            q_err_vec = np.array([q_err.x, q_err.y, q_err.z])
+
+            w_d = np.zeros(3) # desired angular velocity
+            w_d_r = w_d
+
+            w_r = np.array([w[nf_idx[0]], w[nf_idx[1]]])
+
+            w_err = w - C@w_d
+            w_err_r = np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]])
+
+            dw_d = np.zeros(3)
+            dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
+
+            # F = -C_r@dw_d_r + (C[3,1])
+            F = np.zeros(2)
+
+            chi_0 = self.chi_0_prev
+            chi_1 = self.chi_1_prev
+            v_0 = -k_0*diag(np.sqrt(L)@np.sqrt(np.abs(chi_0 - w_err_r)))@np.sign(chi_0 - w_err_r) + chi_1
+
+            dchi_0 = v_0 + self.u_wheels_prev[nf_idx] + F
+            dchi_1 = -k * L @ np.sign(chi_1 - v_0)
+
+            chi_0 = chi_0 + dchi_0*self.t_sample
+            chi_1 = chi_1 + dchi_1*self.t_sample
+            self.chi_0_prev = chi_0
+            self.chi_1_prev = chi_1
+
+            self.v_0_prev = v_0
+            phi = -2*np.array([a*q_err.y*q_err.z + 2*q_err.w*q_err.x*lambda_1, b*q_err.x *q_err.z + 2*q_err.w*q_err.y*lambda_2])
+            dphi = -2*np.array([[lambda_1*q_err.w, a*q_err.z, a*q_err.y], [b*q_err.z, lambda_2*q_err.w, b*q_err.x]])
+
+            Z = w_err_r - phi
+
+            u_r = - F - chi_1 + dphi@Aq@(Z+phi) + (q_err_vec.T @ Lambda @ Aq).T + Gamma_z @ Z
+
+            u = np.array([u_r[0], u_r[1], 0])
 
         return u
 

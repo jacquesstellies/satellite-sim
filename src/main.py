@@ -3,6 +3,8 @@ from satellite import Satellite
 from controller import Controller
 from fault import Fault, FaultModule
 from wheels import WheelModule
+from magt import MagtModule
+from orbit import Orbit
 
 import my_utils
 import my_globals
@@ -156,7 +158,10 @@ class Simulation:
                                     config=config)
         observer_module = ObserverModule(config, results_data, wheel_module)
 
-        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, config=config, results_data=results_data, logging_en=logging_en)
+        orbit = Orbit(altitude=config['orbit']['altitude_km']*1e3)
+        magt_module = MagtModule(config, orbit)
+
+        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, config=config, results_data=results_data, logging_en=logging_en)
 
         self.fault_module.init(wheel_module.num_wheels)
 
@@ -665,6 +670,7 @@ def main():
                 rows_2.append(('q_sat_ref', my_utils.q_axes, 'Reference Quaternion'))
                 rows_2.append(('q_sat_error', my_utils.q_axes, 'Quaternion Error (satellite to reference)'))
                 rows_2.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
+                rows_2.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
                 # rows_2.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
                 
                 simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
@@ -672,17 +678,18 @@ def main():
 
                 simulation.create_plots_separated(rows_2, simulation.results_df, config, LOG_FILE_NAME)
 
-                simulation.create_plots_comparison([('w_wheels', _axes),
-                                    ('w_wheels_est', _axes)
-                                    ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                simulation.create_plots_comparison([('T_wheels', _axes),
-                                    ('T_wheels_est', _axes)
-                                    ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                simulation.create_plots_comparison([('E', _axes), ('E_est', _axes)
-                                    ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                if satellite.wheels_control_enable:
+                    simulation.create_plots_comparison([('w_wheels', _axes),
+                                        ('w_wheels_est', _axes)
+                                        ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                    simulation.create_plots_comparison([('T_wheels', _axes),
+                                        ('T_wheels_est', _axes)
+                                        ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                    simulation.create_plots_comparison([('E', _axes), ('E_est', _axes)
+                                        ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
 
-                simulation.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
-            
+                    simulation.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                
             #-------------------------------------------------------------#
             ###################### Monte Carlo ############################
             elif sim_iter > 1:
