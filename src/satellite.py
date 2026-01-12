@@ -8,7 +8,7 @@ from body import Body
 from controller import Controller
 from fault import Fault, FaultModule
 from wheels import WheelModule
-from orbit import Disturbances
+from orbit import Disturbances, Orbit
 from observer import ObserverModule
 
 class Face():
@@ -27,6 +27,7 @@ class Satellite(Body):
     wheel_module : WheelModule = None
     fault_module : FaultModule = None
     magt_module : MagtModule = None
+    orbit : Orbit = None
     ref_q : Rotation = None
     ref_T = np.zeros(3)
     ref_q_series : list = None
@@ -39,7 +40,7 @@ class Satellite(Body):
 
     config = None
     def __init__(self, wheel_module : WheelModule, controller : Controller, observer_module : ObserverModule,
-                 fault_module : FaultModule, magt_module : MagtModule, wheel_offset = 0, logger = None, logging_en=True,  config=None, results_data=None):
+                 fault_module : FaultModule, magt_module : MagtModule, wheel_offset = 0, orbit = None, logger = None, logging_en=True,  config=None, results_data=None):
         self.config = config
         self.logging_en = logging_en
         self.wheel_module = wheel_module
@@ -94,7 +95,7 @@ class Satellite(Body):
             self.calc_M_inertia_inv()
         else:
             self.calc_M_inertia()
-        self.disturbances = Disturbances()
+        self.disturbances = Disturbances(self.orbit)
         self.calc_face_properties()
         self.wheels_control_enable = config['satellite']['wheels_control_enable']
         if not self.wheels_control_enable and self.controller.type == "backstepping" and self.controller.sub_type == "Shen":
@@ -203,9 +204,11 @@ class Satellite(Body):
                 f_est = np.zeros(3)
 
             self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, q_sat_input, w_sat_input, my_utils.conv_Rotation_obj_to_numpy_q(self.ref_q), self, w_wheels_input, f_est)
-
+        T_magt = np.zeros(3)
         if self.magt_module.enable is True:
-            T_magt = self.magt_module.calc_torque(w_sat_input, self.wheel_module.H_vec)
+            q_sat_err =  q_sat_input.inverse() * my_utils.conv_Rotation_obj_to_numpy_q(self.ref_q)
+            q_err_vec = np.array([q_sat_err.x, q_sat_err.y, q_sat_err.z])
+            T_magt = self.magt_module.calc_torque(q_err_vec, w_sat_input, t)
 
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         

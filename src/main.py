@@ -158,7 +158,7 @@ class Simulation:
                                     config=config)
         observer_module = ObserverModule(config, results_data, wheel_module)
 
-        orbit = Orbit(altitude=config['orbit']['altitude_km']*1e3)
+        orbit = Orbit(config)
         magt_module = MagtModule(config, orbit)
 
         self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, config=config, results_data=results_data, logging_en=logging_en)

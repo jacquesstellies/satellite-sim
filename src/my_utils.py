@@ -73,8 +73,36 @@ def low_pass_filter(value, value_prev, coeff):
 def cross_product(a, b):
     return np.array([a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]])
 
+def mat_multiply_3x3_vec(mat : np.array, vec : np.array):
+    return np.array([mat[0,0]*vec[0] + mat[0,1]*vec[1] + mat[0,2]*vec[2],
+                     mat[1,0]*vec[0] + mat[1,1]*vec[1] + mat[1,2]*vec[2],
+                     mat[2,0]*vec[0] + mat[2,1]*vec[1] + mat[2,2]*vec[2]])
+
 def _sign(x: float) -> int:
     return 1 if x >= 0 else -1
+
+def sat_delta(x: float) -> int:
+    if x > 1:
+        return 1
+    elif x < -1:
+        return -1
+    else:
+        return x
+
+def sat_delta_vec(v: np.array) -> np.array:
+    return np.array([sat_delta(v_i) for v_i in v])
+
+def skew_symmetric(v: np.array) -> np.array:
+    return np.array([[0, -v[2], v[1]],
+                     [v[2], 0, -v[0]],
+                     [-v[1], v[0], 0]])
+
+def col_vec(v: np.array) -> np.array:
+    return np.asmatrix(v).T
+
+def row_vec(v: np.array) -> np.array:
+    return np.asmatrix(v)
+
 #! @brief Create a combined plot with multiple rows and columns
 # @param rows: List of tuples, each containing (row_name, [axes], label)
 # @param cols: Number of columns in the plot

@@ -66,17 +66,15 @@ class Wheel():
 
     def calc_state_rates(self, t : float, state : float, u : float):
         self.w = state
-        # Set fault torque limit
-        T_limit = self.T_max
-    
+
         # Apply fault if enabled (self updated in fault class)
         for fault in self._faults:
             u *= fault.E[self.index][self.index]
             u += fault.u_a[self.index]
 
         # Check torque limit exceeded
-        # if abs(u) >= T_limit:
-        #     u = T_limit*my_utils._sign(u)
+        if abs(u) >= self.T_max and self.config['wheels']['saturation_enable']:
+            u = self.T_max*my_utils._sign(u)
 
             
         # Calculate the new wheel speed derivative

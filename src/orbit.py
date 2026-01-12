@@ -5,15 +5,25 @@ import math
 import quaternion
 import my_utils as my_utils
 
+MU = 398600e3
+
 class Orbit():
     altitude = 0
     inclination = 0
-    v = 0
     radius = 0
     latitude = 0
-    mu = 398600e3
 
-    def __init__(self, altitude):
+    
+    v = np.zeros(3) # velocity vector
+    s = np.zeros(3) # position vector
+    RAAN = 0
+    v_norm = 0
+    period = 0
+    arg_perigee = 0
+    true_anomaly = 0
+
+    def __init__(self, config):
+        altitude = config['orbit']['altitude_km']*1e3
         if altitude > 100000:
             self.altitude = altitude
         else:
@@ -27,22 +37,31 @@ class Orbit():
         m_earth = 5.972e24
         G = 6.67430e-11
         self.radius = altitude + earth_radius
+        print("Orbit radius set to: ", self.radius)
         
         self.inclination = arccos(np.power(RAAN_rate*(1-np.power(e,2)),2)*np.power(self.radius,7/2)/((-3/2)*
-                                    np.sqrt(self.mu)*J*np.power(earth_radius,2)))
+                                    np.sqrt(MU)*J*np.power(earth_radius,2)))
         
-        self.v = np.sqrt(G*m_earth/self.radius)
-        self.latitude = 0
+        self.period = 2*np.pi*self.radius/(MU/self.radius)**0.5
 
+        self.arg_perigee = np.pi/2
+
+        # self.v = np.sqrt(G*m_earth/self.radius)
+        # self.v_norm = np.linalg.norm(self.v)
+        self.true_anomaly = 0
+        # self.s = 
+
+    # orbital parameters update
+    def calc_orbit_state(self, t):
+        self.true_anomaly = 2*np.pi*t/self.period  # complete orbit every 90 minutes
+
+        # self.s_eci = self.radius*np.array()
     
-    def calc_orbit_state():
-
-        return 
         
 class Disturbances():
     orbit : Orbit = None
-    def __init__(self):
-        self.orbit = Orbit(altitude=500000)
+    def __init__(self, orbit):
+        self.orbit = orbit
         
     def calc_aero_torque(self, satellite, q):
         aero_angle = np.pi - np.arctan(10)
