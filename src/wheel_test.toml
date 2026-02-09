@@ -14,7 +14,7 @@ wheel_num = 0
 mul_fault = [ 0.5, 1.0, 1.0, 1.0,]
 add_fault = [ 0, 0, 0, 0,]
 time = 0
-master_enable = true
+master_enable = false
 update_rate = 0.5
 
 [controller]
@@ -25,15 +25,15 @@ ki_wheel_w = 1
 
 [observer]
 t_sample = 0.01
-gain = [ 3.0, 0.005, 0.0000, 0.0, 0.00, 0.0 ] # k_w, k_f, k_fd, k_wd, k_wi, k_fi
+gain = [ 3.0, 0.005, 0.00001, 0.0, 0.00, 0.0 ] # k_w, k_f, k_fd, k_wd, k_wi, k_fi
 
 [simulation]
-duration = 30
-input_torque = 0.2  # Constant torque input
+duration = 50
+input_torque = 0.05  # Constant torque input
 test_mode_en = false
 w_ref_rpm = 2000  # Constant wheel speed reference
 input_torque_func="sine"
-period = 10  # Interval to change the input torque
+period = 30  # Interval to change the input torque
 
 
 [output]

@@ -18,7 +18,9 @@ class Simulation:
     t_next = 0
     y_est = None  # Initial state estimate: [disturbance, wheel speed]
     input_change_interval = 5  # Interval to change the input torque
-    def __init__(self, type, config):
+    wheel : Wheel = None
+    observer : WheelExtendedStateObserver = None
+    def __init__(self, type, config, wheel, observer):
         self.t_prev = 0
         if type == "extended":
             self.y_est = np.zeros(3)
@@ -27,9 +29,17 @@ class Simulation:
         self.period = config['simulation']['period']
         self.input_torque = config['simulation']['input_torque']
         self.input_torque_func = config['simulation']['input_torque_func']
+        self.wheel=wheel
+        self.observer=observer
 
-    input_torque = 0
+    input_torque=0
+    t_input_next=0
+    u_prev = 0
     def calc_input_torque(self, t):
+        if t >= self.t_input_next:
+            self.t_input_next += 0.1
+        else:
+            return self.u_prev
         if self.input_torque_func == "step":
             u = self.input_torque
         elif self.input_torque_func == "reverse_step":
@@ -49,34 +59,33 @@ class Simulation:
             u = self.input_torque * np.sin(2 * np.pi * t / self.period)
         else:
             u = self.input_torque
+        self.u_prev = u
         return u
 
 
-    def wheel_extended_state_observer_simulate(self, t, y, u, wheel, observer):
+    def wheel_extended_state_observer_simulate(self, t, y, u):
+
         u = self.calc_input_torque(t)
-        y = wheel.calc_state_rates(t, y, u)
 
-        dw = y[0]
-        w = y[1]
-
-        # if self.input_change_interval is not None and t >= self.input_change_interval:
-        #     self.input_torque = 0
+        self.wheel.calc_state_rates(t, y[0], u)
 
         if t >= self.t_next:
-            self.t_next += observer.t_sample
-            self.y_est = observer.calc_state_rates(t, self.y_est, [u, w])
+            self.t_next += self.observer.t_sample
+            self.y_est = self.observer.calc_state_estimates(t, self.y_est, [u, self.wheel.w])
 
-        wheel._fault.update(t)
-        [dH, H] = wheel.calc_state_outputs(t, [dw, w])
+        self.wheel._fault.update(t)
+
+        # print(self.wheel.w)
         results_data['time'].append(t)
-        results_data['wheel_speed'].append(w)
-        results_data['wheel_torque'].append(dH)
+        results_data['wheel_speed'].append(self.wheel.w)
+        results_data['wheel_torque'].append(self.wheel.dH)
         results_data['control_input_torque'].append(u)
 
         results_data['wheel_speed_est'].append(self.y_est[0])  # Estimated wheel speed
         results_data['wheel_disturbance_est'].append(self.y_est[1])  # Estimated disturbance
-        results_data['wheel_torque_est'].append(self.y_est[2]*wheel.M_inertia[2][2])  # Estimated torque
-        return y
+        results_data['wheel_torque_est'].append(self.y_est[2]*self.wheel.M_inertia[2][2])  # Estimated torque
+        
+        return [self.wheel.dw]
     
     y_est = 0
     def wheel_observer_simulate(self, t, y, u, wheel, observer):
@@ -86,7 +95,7 @@ class Simulation:
         w = y[1]
         if t - self.t_prev >= observer.t_sample:
             self.t_prev = t
-            self.y_est = observer.calc_state_rates(t, self.y_est, [u, w])
+            self.y_est = observer.calc_state_estimates(t, self.y_est, [u, w])
         wheel._fault.update(t)
         [dH, H] = wheel.calc_state_outputs(t, [dw, w])
         results_data['time'].append(t)
@@ -104,7 +113,7 @@ class Simulation:
 
         if t >= self.t_next:
             self.t_next += observer.t_sample
-            self.y_est = observer.calc_state_rates(t, self.y_est, [u, w])
+            self.y_est = observer.calc_state_estimates(t, self.y_est, [u, w])
         wheel._fault.update(t)
         [dH, H] = wheel.calc_state_outputs(t, [dw, w])
         results_data['time'].append(t)
@@ -165,7 +174,7 @@ def test_wheel_extended_state_observer_torque(config):
     fault = Fault(config)
     wheel = Wheel(config=config, fault=fault)
     observer = WheelExtendedStateObserver(config, wheel)
-    simulation = Simulation("extended", config)
+    simulation = Simulation("extended", config, wheel, observer)
     duration = config['simulation']['duration']  # Simulation duration in seconds
 
     T_input = config['simulation']['input_torque']  # Constant torque input
@@ -188,8 +197,8 @@ def test_wheel_extended_state_observer_torque(config):
     solve_ivp(
         fun=simulation.wheel_extended_state_observer_simulate,
         t_span=(0, duration),
-        y0=[0, 0],  # Initial state: [position, angular velocity]
-        args=(T_input, wheel, observer),  # Control input: constant torque
+        y0=[0.0],  # Initial state: [angular velocity]
+        args=(T_input,),  # Control input: constant torque
         method='RK45',
         t_eval=t_eval,
         max_step=max_step_size,
@@ -201,7 +210,7 @@ def test_wheel_extended_state_observer_speed_control(config):
     fault = Fault(config)
     wheel = Wheel(config=config, fault=fault)
     observer = WheelExtendedStateObserver(config, wheel)
-    simulation = Simulation("extended", config)
+    simulation = Simulation("extended", config, wheel, observer)
     duration = config['simulation']['duration']  # Simulation duration in seconds
 
     w_input = config['simulation']['w_ref_rpm']*2*np.pi/60  # Constant wheel speed reference
@@ -404,8 +413,8 @@ def plot_results_eso(LOG_FILE_NAME):
 
     ax2.plot(df['time'], df['wheel_control_authority'], label='Torque Fraction Available', linestyle='-', color='r')
     ax2.set_ylabel('Control Authority (Dimensionless)')
-    if df['wheel_control_authority'].min() >= 0.0:
-        ax2.set_ylim([0.0, 1.1])
+    # if df['wheel_control_authority'].min() >= 0.0:
+    ax2.set_ylim([0.0, 1.1])
     ax2.legend(loc='upper right')
     plt.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_wheel_control_authority_vs_torque_n_disturbance.pdf"), bbox_inches='tight')
 
