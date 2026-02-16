@@ -181,7 +181,9 @@ class Satellite(Body):
             self.ref_q = self.ref_q_series[self.ref_q_series_index]
             self.ref_q_series_index += 1
             print("new ref q=", self.ref_q.as_quat())
-
+    
+    def calc_delta_M_inertia(self, t):
+        return np.diag(np.array([2*np.sin(0.1*t), 2.8*np.sin(0.2*t), 3.6*np.sin(0.3*t)]))
 
     wheels_control_enable = True
     next_logger_timestamp = 0.0
@@ -224,11 +226,18 @@ class Satellite(Body):
         # T_grav = self.disturbances.calc_grav_torque(self, q_sat_input)
         # T_dist = (T_aero + T_grav)
 
-        # T_dist = self.disturbances.calc_dist_torque_Shen(t)
-        T_dist = np.zeros(3)
+        T_dist = self.disturbances.calc_dist_torque_Nadafi(t)
+        # T_dist = np.zeros(3)
+        # delta_M_inertia = self.calc_delta_M_inertia(t)
+        delta_M_inertia = np.zeros((3,3))
+        M_inertia_effective = self.M_inertia + delta_M_inertia
+        M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
+        # delta_M_inertia = np.zeros((3,3))
+        # T_dist = np.zeros(3)
 
         Hnet = self.M_inertia@(w_sat_input) + self.wheel_module.H_vec
-        dw_sat_result = self.M_inertia_inv@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product(w_sat_input,Hnet)) + T_magt
+        dw_sat_result = (M_inertia_effective_inv)@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product(w_sat_input,Hnet)) + T_magt
+        # dw_sat_result = (self.M_inertia_inv)@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product(w_sat_input,Hnet)) + T_magt
 
         #### Calculate the new satellite body state rates
         inertial_v_q = np.quaternion(0, w_sat_input[0], w_sat_input[1], w_sat_input[2]) # put the inertial velocity in q form
