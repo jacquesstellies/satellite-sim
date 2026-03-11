@@ -78,9 +78,16 @@ def parse_args():
     parser.add_argument("-a", "--append", help="appends text to log file names", type=str)
     parser.add_argument("-t", "--test_mode", help="enable test mode", action='store_true')
     parser.add_argument("-k", "--disable_sim", help="disable simulation", action='store_true')
+    # parser.add_argument("-c", "--config_override", help="override config values with a toml file", type=str)
+    parser.add_argument("-c", "--config", help="pass config file location", type=str)
     args = vars(parser.parse_args())
 
-    with open('config.toml', 'r') as config_file:
+    config_path = "config.toml"
+
+    if args["config"] is not None:
+        config_path = args["config"]
+    
+    with open(config_path, 'r') as config_file:
         config = toml.load(config_file)
     
     append_date = args["append_date"]
