@@ -168,7 +168,7 @@ class Simulation:
         orbit = Orbit(config)
         magt_module = MagtModule(config, orbit)
 
-        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, config=config, results_data=results_data, logging_en=logging_en)
+        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, orbit=orbit, config=config, results_data=results_data, logging_en=logging_en)
 
         self.fault_module.init(wheel_module.num_wheels)
 
@@ -264,7 +264,7 @@ class Simulation:
                         self.results_data["q_sat_z"], 
                         self.results_data["q_sat_w"]])
         r_sat =  Rotation.from_quat(quat=q_sat.T)
-        [self.results_df['e_sat_yaw'],self.results_df['e_sat_pitch'], self.results_df['e_sat_roll']] = r_sat.as_euler('zyx', degrees=True).T
+        [self.results_df['e321_sat_yaw'],self.results_df['e321_sat_pitch'], self.results_df['e321_sat_roll']] = r_sat.as_euler('zyx', degrees=True).T
 
         q_sat_ref = np.array([self.results_df["q_sat_ref_x"],
                               self.results_df["q_sat_ref_y"],
@@ -339,11 +339,11 @@ class Simulation:
                 print(f"steady_state (s): {round(self.steady_state,3)}")
 
 
-            control_info_y = control.step_info(sysdata=self.results_df['e_sat_yaw'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
-            control_info_p = control.step_info(sysdata=self.results_df['e_sat_pitch'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
-            control_info_r = control.step_info(sysdata=self.results_df['e_sat_roll'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
+            # control_info_y = control.step_info(sysdata=self.results_df['e_sat_yaw'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
+            # control_info_p = control.step_info(sysdata=self.results_df['e_sat_pitch'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
+            # control_info_r = control.step_info(sysdata=self.results_df['e_sat_roll'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
 
-            print(f"steady state value: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
+            # print(f"steady state value: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
         except Exception as e:
             print(f"Error calculating accuracy: {e}")
 
@@ -503,6 +503,7 @@ def main():
         os.mkdir(LOG_FOLDER_PATH)
     results_data = {}
     results_data["time"] = []
+    results_data["jd"] = []
     for axis in my_utils.xyz_axes:
         results_data["T_sat_" + axis] = []
         results_data["dw_sat_" + axis] = []
@@ -647,7 +648,7 @@ def main():
                 cols = 2
                 rows = [ ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)'), 
                         ('q_sat',my_utils.q_axes, 'Quaternion'), 
-                        ('e_sat', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
+                        ('e321_sat', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
                         ('euler_axis_sat_deg', ['none'], 'Euler Angle about Principal Axis (deg)'),
                         ('T_sat',my_utils.xyz_axes, 'Torque (N)'), 
                         ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), 
@@ -679,6 +680,10 @@ def main():
                 rows_2.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
                 rows_2.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
                 # rows_2.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
+
+                rows_2.append(('s_sat_eci', my_utils.xyz_axes, 'Satellite Position ECI (km)'))
+                rows_2.append(('v_sat_eci', my_utils.xyz_axes, 'Satellite Velocity ECI (km/s)'))
+                rows_2.append(('n_sun', my_utils.xyz_axes, 'Sun Vector (unitless)'))
                 
                 simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
                 simulation.create_plots_combined(rows, cols, simulation.results_df, config, LOG_FILE_NAME)

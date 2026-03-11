@@ -103,6 +103,9 @@ def col_vec(v: np.array) -> np.array:
 def row_vec(v: np.array) -> np.array:
     return np.asmatrix(v)
 
+def magnitude(vector): 
+    return math.sqrt(sum(pow(element, 2) for element in vector))
+
 #! @brief Create a combined plot with multiple rows and columns
 # @param rows: List of tuples, each containing (row_name, [axes], label)
 # @param cols: Number of columns in the plot

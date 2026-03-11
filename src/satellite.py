@@ -58,6 +58,7 @@ class Satellite(Body):
         self.next_logger_timestamp = controller.t_sample
         self._logger = logger
         self.magt_module = magt_module
+        self.orbit = orbit
 
         self.fault_module = fault_module
         self.results_data = results_data
@@ -81,6 +82,9 @@ class Satellite(Body):
         
         for i in my_utils.xyz_axes:
             self.results_data[f'T_magt_{i}'] = []
+            self.results_data[f's_sat_eci_{i}'] = []
+            self.results_data[f'v_sat_eci_{i}'] = []
+            self.results_data[f'n_sun_{i}'] = []
         
         self.dimensions, self.mass = config['satellite']['dimensions'], config['satellite']['mass']
 
@@ -169,18 +173,40 @@ class Satellite(Body):
 
         self.calc_M_inertia_inv()
 
+    def update_mode(self):
+        if self.mode == "ref_pointing":
+            return
+        if self.orbit.check_sun_eclipse():
+            self.mode = "nominal_night"
+        else:
+            self.mode = "nominal_day"
+
     t_ref_update = 0
     ref_q_series_index = 0
     def update_ref_q(self, t):
-        if self.config['satellite']['use_ref_series'] is False:
-            return
-        if self.ref_q_series_index > len(self.ref_t_series)-1:
-            return
-        if t >= self.ref_t_series[self.ref_q_series_index]:
-            # print("updating ref q, t=", t, " next t=", self.ref_t_series[self.ref_q_series_index+1], " index=", self.ref_q_series_index)
-            self.ref_q = self.ref_q_series[self.ref_q_series_index]
-            self.ref_q_series_index += 1
-            print("new ref q=", self.ref_q.as_quat())
+        if self.mode == "nominal_day":
+            sun_vec = self.orbit.n_BS_B
+
+            z_body = np.array([0,0,1])
+            x_body = sun_vec
+            y_body = my_utils.cross_product(z_body, x_body)
+            r_matrix = np.array([x_body, y_body, z_body]).T
+            self.ref_q = Rotation.from_matrix(r_matrix).as_quat()
+
+        if self.mode == "nominal_night":
+            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TBO_B))
+            self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
+
+        if self.mode == "ref_pointing":
+            if self.config['satellite']['use_ref_series'] is False:
+                return
+            if self.ref_q_series_index > len(self.ref_t_series)-1:
+                return
+            if t >= self.ref_t_series[self.ref_q_series_index]:
+                # print("updating ref q, t=", t, " next t=", self.ref_t_series[self.ref_q_series_index+1], " index=", self.ref_q_series_index)
+                self.ref_q = self.ref_q_series[self.ref_q_series_index]
+                self.ref_q_series_index += 1
+                print("new ref q=", self.ref_q.as_quat())
     
     def calc_delta_M_inertia(self, t):
         return np.diag(np.array([2*np.sin(0.1*t), 2.8*np.sin(0.2*t), 3.6*np.sin(0.3*t)]))
@@ -197,6 +223,7 @@ class Satellite(Body):
         q_sat_input = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
         w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
 
+        self.update_mode()
         self.update_ref_q(t)
         ### Calculate controller output
         if self.controller.enable is True:
@@ -222,6 +249,7 @@ class Satellite(Body):
             self.E = self.fault_module.E
         #### Calculate state rates for satellite various subsystems
 
+        self.orbit.calc_orbit_state(t)
         # T_aero = self.disturbances.calc_aero_torque(self, q_sat_input)
         # T_grav = self.disturbances.calc_grav_torque(self, q_sat_input)
         # T_dist = (T_aero + T_grav)
@@ -252,6 +280,7 @@ class Satellite(Body):
             if t >= self.next_logger_timestamp:
                 # print("logging data")
                 self.results_data['time'].append(t)
+                self.results_data['jd'].append(self.orbit.jd + self.orbit.fr)
 
                 # Collect results data for logging                    
                 for i, axis in enumerate(my_utils.xyz_axes):
@@ -259,6 +288,9 @@ class Satellite(Body):
                     self.results_data['dw_sat_' + axis].append(dw_sat_result[i])
                     self.results_data['T_dist_' + axis].append(T_dist[i])
                     self.results_data['T_magt_' + axis].append(T_magt[i])
+                    self.results_data['s_sat_eci_' + axis].append(self.orbit.s_eci[i])
+                    self.results_data['v_sat_eci_' + axis].append(self.orbit.v_eci[i])
+                    self.results_data['n_sun_' + axis].append(self.orbit.n_BS_B[i])
                 
                 for i, axis in enumerate(my_utils.q_axes):
                     self.results_data['q_sat_ref_' + axis].append(self.ref_q.as_quat()[i])
