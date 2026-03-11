@@ -82,8 +82,7 @@ class Wheel():
 
             
         # Calculate the new wheel speed derivative
-        # self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
-        self.dw = u*self.M_inertia_inv_fast
+        self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
         
         # if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
         #     print("wheel speed limit reached")
