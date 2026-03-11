@@ -47,11 +47,15 @@ class Wheel():
         self.index = index
         self.t_sample = self.config['controller']['t_sample']
         self.friction_coef = self.config['wheels']['friction_coef']
+        self.fd_inst_time_threshold = self.config['FDIR']['wheels']['inst_time_threshold']
+        self.fd_inst_count_threshold = self.config['FDIR']['wheels']['inst_count_threshold']
         self.calc_M_inertia()
 
         target_noise_db = 2
         target_noise_watts = 10 ** (target_noise_db / 10)
         self._noise_std = math.sqrt(target_noise_watts)
+
+        fd_inst = (False, 0)
     
     def calc_M_inertia(self):
         # Moment of inertia
@@ -121,6 +125,30 @@ class Wheel():
         state = self.calc_state_rates(t, state, u)
 
         return state, u
+    
+
+    # fd_inst_en = False
+    # fd_inst_count = 0
+    fd_inst_count_threshold = 0
+    fd_inst_time_threshold = 0
+    fd_inst_list = deque(maxlen=50)
+    dH_prev = 0
+    def update_fd(self, t):
+        
+        if not self.config['FDIR']['wheels']['enable']:
+            return
+        
+        # Check wheel instability
+        if my_utils._sign(self.dH_prev) != my_utils._sign(self.dH):
+            self.fd_inst_list.append(t)
+            
+            if self.fd_inst_list[0] < t - self.fd_inst_time_threshold:
+                self.fd_inst_list.popleft()
+
+            if len(self.fd_inst_list) >= self.fd_inst_count_threshold:
+                raise Exception(f"Wheel instability detected at time {t}")
+            
+        self.dH_prev = self.dH
 
 class WheelModule():
     wheels = None
@@ -177,6 +205,8 @@ class WheelModule():
         self.dH_wheels = np.array(self.num_wheels)
         self.H_vec = np.zeros(3)
         self.dH_vec = np.zeros(3)
+
+        self.fd_inst = np.zeros(self.num_wheels)
 
     w_wheels = None
     dw_wheels = None

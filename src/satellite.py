@@ -37,10 +37,22 @@ class Satellite(Body):
 
     faces : list[Face] = []
     disturbances : Disturbances = None
+    mode: str = ""
+    modes: list[str] = ["ref_pointing", "nominal_day", "nominal_night", "safe"]
+
+    q = np.quaternion(1,0,0,0)
+    w = np.zeros(3)
+    H = np.zeros(3)
+    dH = np.zeros(3)
+
+    fd_w_max = 2*np.pi/180 # rad/s
 
     config = None
     def __init__(self, wheel_module : WheelModule, controller : Controller, observer_module : ObserverModule,
-                 fault_module : FaultModule, magt_module : MagtModule, wheel_offset = 0, orbit = None, logger = None, logging_en=True,  config=None, results_data=None):
+                 fault_module : FaultModule, magt_module : MagtModule, wheel_offset = 0, orbit: Orbit = None, logger = None, logging_en=True,  config=None, results_data=None):
+        
+        self.mode = config['satellite']['mode']
+        
         self.config = config
         self.logging_en = logging_en
         self.wheel_module = wheel_module
@@ -131,6 +143,7 @@ class Satellite(Body):
         else:
             raise(Exception("no reference angle commanded"))
         
+        self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
         
     def calc_face_properties(self):
@@ -275,6 +288,7 @@ class Satellite(Body):
         control_power_result = abs(self.wheel_module.dH_vec * w_sat_input) ## @TODO fix this
         
         self.fault_module.update(t)
+        self.update_FDIR(t)
 
         if self.logging_en:
             if t >= self.next_logger_timestamp:
@@ -311,3 +325,18 @@ class Satellite(Body):
                 self.next_logger_timestamp += self.controller.t_sample
 
         return np.hstack([dw_sat_result, dq_result, control_power_result, self.wheel_module.dw_wheels])
+
+    def update_fd(self, t):
+        # print("angular")
+        if not self.config['FDIR']['satellite']['enable']:
+            return
+        if my_utils.magnitude(self.w) > self.fd_w_max:
+            raise Exception("Divergent rate detected, w_sat = ", self.w)
+        
+    def update_FDIR(self, t):
+        
+        self.update_fd(t)
+
+        for wheel in self.wheel_module.wheels:
+            wheel.update_fd(t)
+        

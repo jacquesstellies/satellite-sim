@@ -87,6 +87,7 @@ time = 100
 master_enable = true
 
 [satellite]
+mode="ref_pointing"
 euler_init_en = false
 euler_init = [ 0, 0, 0,]
 # euler_init = [ 0, 0, 0,]
@@ -125,3 +126,15 @@ show_plots = false
 x = 0.3
 y = 0.3
 z = 0.3
+
+[FDIR]
+enable = false
+
+[FDIR.wheels]
+enable = false
+inst_time_threshold = 10
+inst_count_threshold = 5
+
+[FDIR.satellite]
+enable = false
+w_max_dps = 10
