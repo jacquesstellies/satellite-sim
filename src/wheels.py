@@ -5,6 +5,7 @@ from state_provider import StateProvider
 
 import my_utils as my_utils
 import my_globals
+from collections import deque
 
 from fault import Fault
 
