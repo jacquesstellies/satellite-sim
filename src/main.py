@@ -18,6 +18,7 @@ import pandas as pd
 import argparse
 import toml
 import datetime
+import time
 import control
 from inspect import currentframe, getframeinfo
 import cProfile
@@ -30,7 +31,23 @@ DEBUG = True
 
 # results_data = my_globals.results_data
 
-    
+## Reference Frames:
+# G -> ECI (Earth Centered Inertial)
+# B -> Body Frame (Satellite Body Frame)
+# I -> Body Inertial Frame (Non-Rotating wrt ECI)
+# S -> Sun Frame
+
+## Name conventions:
+# w -> angular velocity
+# d{} -> derivative of {}
+# q -> quaternion
+# T -> torque
+# M_inertia -> moment of inertia matrix
+# H -> angular momentum
+# r/s -> position vector
+# v -> velocity vector
+# n -> unit vector
+
 # END DEF class Satellite()
 
 def output_dict_to_csv(path, file_name, data):
@@ -56,7 +73,7 @@ def create_default_log_file_name(config):
     
     filename = config['controller']['type']
     
-    if(config['controller']['type'] != "q_feedback"):
+    if(config['controller']['type'] != "pid"):
         filename += ('_' + config['controller']['sub_type'])
     
     filename += '_' + config['wheels']['config']
@@ -200,6 +217,7 @@ class Simulation:
             entry.clear()
 
     def simulate(self):
+        t_monotonic_start_unix = time.time()
         if self.config['observer']['enable'] is True:
             max_step = np.min([self.satellite.controller.t_sample, self.satellite.observer_module.t_sample])
         else:
@@ -209,8 +227,12 @@ class Simulation:
         sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
                         t_eval=self.sim_time_series,
                         max_step=max_step)
+        
         # Integrate satellite dynamics over time
+        t_monotonic_end_unix = time.time()
+        print(f"Simulation took {t_monotonic_end_unix - t_monotonic_start_unix} seconds")
         return sol
+    
     def simulate_multithread(self):
         self.results_data = None
         print(f"Starting sim {self.iter}")
@@ -288,8 +310,7 @@ class Simulation:
                 self.calc_control_energy_output_results(self.results_data['control_energy_{}'.format(axis)])
         
         if self.config['output']['accuracy_enable']:
-            self.calc_accuracy_output_results()
-        
+            self.calc_accuracy_output_results()    
     
     control_energy_log_output = ""
     def calc_control_energy_output_results(self, control_energy_arr):
@@ -701,10 +722,10 @@ def main():
                                         ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
 
                     simulation.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                
             #-------------------------------------------------------------#
             ###################### Monte Carlo ############################
             elif sim_iter > 1:
+                simulation.monte_carlo = True
                 print(f"Running Monte Carlo simulation with {sim_iter} iterations")
                 def test_q_init(q_init, results=None):
 
@@ -765,9 +786,7 @@ def main():
                             plt.show()
                         except Exception as e:
                             print(f"Error showing plots: {e}")
-                # plot_q()
-                # exit()
-                # quats = []
+
                 monte_carlo_results = dict()
                 
                 for i in range(sim_iter):

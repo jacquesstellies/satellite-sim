@@ -8,6 +8,11 @@ import os
 xyz_axes = ['x', 'y', 'z']
 q_axes = ['x', 'y', 'z', 'w']
 
+RAD_TO_DEG = 180/np.pi
+DEG_TO_RAD = np.pi/180
+RPM_TO_RAD_PER_SEC = np.pi/30
+RAD_PER_SEC_TO_RPM = 30/np.pi
+
 # rotate an object's moment of inertia about the xyz axes (in degrees)
 def rotate_M_inertia(M_inertia : np.array, dir : Rotation):
     
@@ -51,6 +56,14 @@ def conv_Rotation_obj_to_euler_axis_angle(r : Rotation):
     alpha = np.arccos(0.5*(np.trace(r.as_matrix())-1))
     return alpha
 
+# def conv_dcm_to_quat(dcm : np.array):
+    # q4 = 0.5*np.sqrt(1 + dcm[0,0] + dcm[1,1] + dcm[2,2])
+    # q = np.quaternion(q4,
+    #                   (dcm[1,2] - dcm[2,1])/(4*q4),
+    #                   (dcm[2,0] - dcm[0,2])/(4*q4),
+    #                   (dcm[0,1] - dcm[1,0])/(4*q4))
+    # return q
+
 # assumes scalar-last format
 def get_principle_angle_from_array(q):
     return 2*np.arctan2(np.linalg.norm(q[:3]), q[3])
@@ -61,9 +74,10 @@ def get_principal_angle_from_np_quaternion(q : np.quaternion):
 def round_dict_values(d, k):
     return {key: float(f"{value:.{k}E}") for key, value in d.items()}
 
+# Deprecated
 def conv_rpm_to_rads_per_sec(value):
     return value*np.pi/30
-
+# Deprecated
 def conv_rads_per_sec_to_rpm(value):
     return value*30/np.pi
 
@@ -91,6 +105,26 @@ def sat_delta(x: float) -> int:
 
 def sat_delta_vec(v: np.array) -> np.array:
     return np.array([sat_delta(v_i) for v_i in v])
+
+def sat_norm(v: np.array) -> np.array:
+    norm = np.linalg.norm(v)
+    if norm >= 1:
+        return v/norm
+    else:
+        return v
+
+def sat(v: float, max: float) -> float:
+    if v > max:
+        return max
+    elif v < -max:
+        return -max
+    else:
+        return v
+
+def sat_vec(v: np.array, max: float) -> np.array:
+    for i in range(len(v)):
+        v[i] = sat(v[i], max)
+    return v
 
 def skew_symmetric(v: np.array) -> np.array:
     return np.array([[0, -v[2], v[1]],
