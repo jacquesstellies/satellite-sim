@@ -134,7 +134,6 @@ class ObserverModule():
 
     wheel_module: WheelModule = None
     config : dict = None
-    results_data : dict = None
     fault : Fault = None
     t_sample : float = 0
     wheel_extended_state_observers : list[WheelExtendedStateObserver] = []
@@ -145,9 +144,8 @@ class ObserverModule():
     dw_wheels_est : np.array = None # wheel acceleration estimate
 
 
-    def __init__(self, config : dict, results_data : dict, wheel_module: WheelModule, fault: Fault=None):
+    def __init__(self, config : dict, wheel_module: WheelModule, fault: Fault=None):
         self.config = config
-        self.results_data = results_data
         self.fault = fault
         self.wheel_module = wheel_module
         self.t_sample : float = config['observer']['t_sample']

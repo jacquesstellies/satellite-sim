@@ -13,9 +13,11 @@ class Fault():
     u_a = None
     config = None
     f = None
+    verbose = True
 
     def __init__(self, config, index):
         self.config = config
+        self.verbose = self.config['simulation']['verbose']
         self.index = index
         self.time = self.config['fault'][f'{self.index}']['time']
 
@@ -41,7 +43,8 @@ class Fault():
         if t < self.time or not self.master_enable or not self.config['faults']['master_enable']:
             return False
         if self.count == 0:
-            print("fault_enabled")
+            if self.verbose:
+                print("fault_enabled")
             self.E = self.mul_fault_matrix
             self.u_a = self.add_fault_matrix
             self.count+=1

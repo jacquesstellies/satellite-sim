@@ -64,6 +64,37 @@ def conv_Rotation_obj_to_euler_axis_angle(r : Rotation):
     #                   (dcm[0,1] - dcm[1,0])/(4*q4))
     # return q
 
+def quaternion_multiply(q1 : np.array, q2 : np.array):
+    # w1, x1, y1, z1 = q1[3], q1[0], q1[1], q1[2]
+    # w2, x2, y2, z2 = q2.w, q2.x, q2.y, q2.z
+    qv1 = q1[:3]
+    qv2 = q2[:3]
+    w1 = q1[3]
+    w2 = q2[3]
+    w = w1*w2 - np.dot(qv1, qv2)
+    qv = w1*qv2 + w2*qv1 + cross_product(qv1, qv2)
+
+    # return np.quaternion(w, qv[0], qv[1], qv[2])
+    return np.array([qv[0], qv[1], qv[2], w])
+
+def get_quaternion_error_bong_wie(qc : np.quaternion, qd : np.quaternion):
+
+    qe = np.array([[qc.w, qc.z, -1*qc.y, -1*qc.x],
+                   [-1*qc.z, qc.w, qc.x, -1*qc.y],
+                   [qc.y, -1*qc.x, qc.w, -1*qc.z],
+                   [qc.x, qc.y, qc.z, qc.w]])\
+        @ np.array([qd.x, qd.y, qd.z, qd.w])
+    return np.quaternion(qe[3], qe[0], qe[1], qe[2])
+
+def get_quaternion_error_Nadafi(qd : np.quaternion, q : np.quaternion):
+
+    qe = np.array([[qd.w, qd.x, qd.y, qd.z],
+                   [qd.x, -qd.w, -1*qd.z, -1*qd.y],
+                   [qd.y, qd.z, -1*qd.w, -1*qd.x],
+                   [qd.z, -1*qd.y, qd.x, -1*qd.w]])\
+        @ np.array([q.x, q.y, q.z, q.w])
+    return np.quaternion(qe[0], qe[1], qe[2], qe[3])
+
 # assumes scalar-last format
 def get_principle_angle_from_array(q):
     return 2*np.arctan2(np.linalg.norm(q[:3]), q[3])

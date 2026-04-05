@@ -1,10 +1,12 @@
 from observer import WheelExtendedStateObserver, ObserverModule
-from satellite import Satellite
+from satellite import Satellite, DivergentRate
 from controller import Controller
 from fault import Fault, FaultModule
 from wheels import WheelModule
 from magt import MagtModule
 from orbit import Orbit
+from logger import Logger
+import visualizer as viz
 
 import my_utils
 import my_globals
@@ -230,16 +232,24 @@ class Simulation:
         
         # Integrate satellite dynamics over time
         t_monotonic_end_unix = time.time()
+
         print(f"Simulation took {t_monotonic_end_unix - t_monotonic_start_unix} seconds")
         return sol
     
-    def simulate_multithread(self):
-        self.results_data = None
-        print(f"Starting sim {self.iter}")
-        sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
-                        # t_eval=self.sim_time_series,
-                        max_step=self.satellite.controller.t_sample)
-        self.results_data = sol
+    def simulate_monte_carlo(self):
+        if self.config['observer']['enable'] is True:
+            max_step = np.min([self.satellite.controller.t_sample, self.satellite.observer_module.t_sample])
+        else:
+            max_step = self.satellite.controller.t_sample
+        self.sim_time_series = np.arange(0, self.sim_time, max_step)
+        try:
+            sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
+                            t_eval=self.sim_time_series,
+                            max_step=max_step)
+        except DivergentRate:
+            return np.nan
+            
+        return sol
 
     def collect_results(self, sol):
         
@@ -247,8 +257,8 @@ class Simulation:
             self.results_data[f'w_sat_{axis}'] = interpolate_data(sol.y[i], sol.t, self.sim_time_series)
 
         for i,axis in enumerate(my_utils.q_axes):
-            self.results_data[f'q_sat_{axis}'] = interpolate_data(sol.y[i+3], sol.t, self.sim_time_series)
-        
+            self.results_data[f'q_sat_{axis}'] = np.clip(interpolate_data(sol.y[i+3], sol.t, self.sim_time_series), -1, 1)
+            
         for i,axis in enumerate(my_utils.xyz_axes):
             self.results_data[f'control_energy_{axis}'] = interpolate_data(sol.y[i+7], sol.t, self.sim_time_series)
         
