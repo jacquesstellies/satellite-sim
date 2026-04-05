@@ -50,7 +50,15 @@ class Wheel():
         self.friction_coef = self.config['wheels']['friction_coef']
         self.fd_inst_time_threshold = self.config['FDIR']['wheels']['inst_time_threshold']
         self.fd_inst_count_threshold = self.config['FDIR']['wheels']['inst_count_threshold']
-        self.calc_M_inertia()
+        if self.config['wheels']['use_inertia']:
+            self.M_inertia[0][0] = 0
+            self.M_inertia[1][1] = 0
+            self.M_inertia[2][2] = self.config['wheels']['M_inertia']
+            self.M_inertia_fast = self.M_inertia[2][2]
+            # self.M_inertia_inv = np.linalg.inv(self.M_inertia)
+            self.M_inertia_inv_fast = 1/self.M_inertia_fast
+        else:
+            self.calc_M_inertia()
 
         target_noise_db = 2
         target_noise_watts = 10 ** (target_noise_db / 10)
