@@ -22,8 +22,8 @@ T_max = 1000
 T_min = 0
 filter_coef = 0
 t_sample = 0.1
-type = "backstepping" # q_feedback, backstepping, adaptive
-sub_type = "Nafadi" # Nafadi, Shen
+type = "pid" # pid, backstepping, adaptive
+sub_type = "Nadafi_BS" # Nadafi_BS, Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
 adaptive_gain = 0.1
 detection_en = true
 
@@ -46,7 +46,7 @@ c_2 = 0.1
 
 [observer]
 enable = true
-feedback_en = true
+feedback_en = false
 t_sample = 0.01
 gain = [ 3.00, 0.005, 0.000 ]
 

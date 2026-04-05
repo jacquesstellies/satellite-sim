@@ -2,7 +2,7 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 120
+duration = 100
 resolution = 0.1
 test_mode_en = false
 test_duration = 3
@@ -10,6 +10,8 @@ test_resolution = 1
 iterations = 1
 tuning = false
 input_type="ref" # ref, ref_square, torque, sine, square
+log_enable = true
+verbose = false
 
 [controller]
 enable = true
@@ -37,14 +39,47 @@ c_1 = 0.01
 c_2 = 0.1
 
 [Nadafi]
-Gamma_z = [[1.0, 0.0], [0.0, 1.0],]
-Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
-L = [ [ 2.5, 0.0,], [ 0.0, 2.5,],]
+## ORIGINAL DONT CHANGE
+Gamma_z11 = 1.5
+Gamma_z22 = 1.2 
+L11 = 10.0
+L22 = 10.0
 kappa_0 = 0.1
 kappa_1 = 0.15
 lambda_1 = 3
 lambda_2 = 3
 lambda_3 = 6
+Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
+
+## Tuned BS
+# Gamma_z11 = 2.83341956
+# Gamma_z22 = 5.54856172 
+# L11 = 0.70753585
+# L22 = 3.9088719
+# lambda_1 = 18.90367711
+# lambda_2 = 0.48283585
+# lambda_3 = 19.6975598
+# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
+## Unused
+# kappa_0 = 0.1
+# kappa_1 = 0.15
+
+# Gamma_z = [[9.06857102, 0.0], [0.0, 9.06857102],]
+# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
+# L = [ [ 15.77364414, 0.0,], [ 0.0, 4.19056857,],]
+# kappa_0 = 0.1
+# kappa_1 = 0.15
+# lambda_1 = 16.82618213
+# lambda_2 = 0.48848908
+# lambda_3 = 14.91080406
+# Gamma_z = [[1.18207177, 0.0], [0.0, 1.61654323]] 
+# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
+# L = [[10.02877686, 0.0], [0.0, 11.03073246]]
+# kappa_0 = 0.29118643
+# kappa_1 = 0.08459026
+# lambda_1 = 3.32866126
+# lambda_2 = 3.47824203
+# lambda_3 = 6.91771475
 
 [observer]
 enable = true
@@ -57,6 +92,8 @@ config = "ortho" # tetra, ortho, pyramid, custom
 mass = 0.31
 radius = 0.066
 height = 0.025
+M_inertia = 0.05
+use_inertia = false
 max_speed_rpm = 10000
 max_torque = 1.0
 num_wheels = 3
@@ -67,7 +104,7 @@ saturation_enable = false
 [magt]
 mag_moment_max = 100 # Am2
 t_sample = 1
-enable = false
+enable = true
 
 [faults]
 master_enable = true
@@ -92,16 +129,16 @@ master_enable = false
 
 [satellite]
 mode="ref_pointing"
-euler_init_en = false
-euler_init = [ 0, 0, 0,]
+euler_init_en = true
+euler_init = [ 30, 30, 0,]
 # euler_init = [ 0, 0, 0,]
 # q_init = [ -0.5, 0.3, 0.4, 0.7071,]
 q_init = [ 0, 0, 0, 1,]
-use_ref_euler = true
-ref_euler = [ 10, 30, 0,]
-use_ref_q = false
-# ref_q = [ 0, 0, 0, 1,]
-ref_q = [ 0.12707253, -0.17409001,  0.12707253,  0.96819307]
+use_ref_euler = false
+ref_euler = [ 2, 2, 0,]
+use_ref_q = true
+ref_q = [ 0, 0, 0, 1,]
+# ref_q = [ 0.12707253, -0.17409001,  0.12707253,  0.96819307]
 # ref_q = [ -0.9880316, 0.0, 0.0, 0.1542514 ]
 use_ref_series = false
 # ref_q_series = [[ 0.4871745, 0.0, 0.0, 0.8733046,], [ 0.0, 0.0, 0.0, 1.0 ]]
@@ -117,6 +154,10 @@ inertia_override = true
 [orbit]
 altitude_km = 500 # km
 
+[disturbances]
+enable = false
+model = "Nadafi"
+
 [output]
 accuracy_enable = true
 energy_enable = true
@@ -126,6 +167,11 @@ pdf_output_enable = true
 log_file_name_overide = "None"
 separate_plots_display = false
 show_plots = false
+
+[output.visualizer]
+enable = false
+file_path = "/opt/satellite-visualizer/dist/telemetry.json"
+t_sample = 1.0
 
 [satellite.dimensions]
 x = 0.3
@@ -140,4 +186,4 @@ inst_count_threshold = 10
 
 [FDIR.satellite]
 enable = false
-w_max_dps = 5 # deg/s
+w_max_dps = 600 # deg/s
