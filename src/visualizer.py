@@ -52,14 +52,10 @@ def convert_results_df_to_json(results_df: pd.DataFrame, t_sample: float = 1.0):
             mask[i] = True
             t1 = t1 + t_sample
             
-    results_df = results_df[mask]
+    # Use .loc[...] and .copy() to avoid SettingWithCopyWarning when assigning new columns
+    results_df = results_df.loc[mask].copy()
     # time = [convert_jd_to_datetime(jd) for jd in results_df['jd']]
-    results_df['datetime'] = [convert_jd_to_datetime(jd) for jd in results_df['jd']]
-
-    # results_df['q_sat'] = results
-    # quaternion = results_df['q_sat'].tolist()
-    # position = results_df['s_eci'].tolist()
-    # velocity = results_df['v_eci'].tolist()
+    results_df.loc[:, 'datetime'] = results_df['jd'].apply(convert_jd_to_datetime)
 
     # return time
     return convert_sim_data_to_json(results_df)

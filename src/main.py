@@ -28,6 +28,7 @@ import pyswarms
 import threading
 
 DEBUG = True
+ROOT_DIR = os.popen("git rev-parse --show-toplevel").read().strip()
 
 # all units are in SI (m, s, N, kg.. etc)
 
@@ -99,6 +100,7 @@ def parse_args():
     parser.add_argument("-k", "--disable_sim", help="disable simulation", action='store_true')
     # parser.add_argument("-c", "--config_override", help="override config values with a toml file", type=str)
     parser.add_argument("-c", "--config", help="pass config file location", type=str)
+    parser.add_argument("-V", "--visualize", help="visualize the results after simulating", action='store_true')
     args = vars(parser.parse_args())
 
     config_path = "config.toml"
@@ -135,19 +137,23 @@ def parse_args():
     if args['append'] is not None:
         LOG_FILE_NAME += f"_{args['append']}"
 
-    LOG_FOLDER_BASE_PATH = os.path.abspath('../data_logs')
+    # ROOT_DIR = os.popen("git rev-parse --show-toplevel").read().strip()
+    LOG_FOLDER_BASE_PATH = os.path.abspath(f'{ROOT_DIR}/data_logs')
     LOG_FOLDER_PATH = os.path.join(LOG_FOLDER_BASE_PATH,LOG_FILE_NAME)
     if not os.path.exists(LOG_FOLDER_BASE_PATH) and LOG_FILE_NAME != None:
         raise Exception(f"Log folder {LOG_FOLDER_BASE_PATH} does not exist")
     
     print(f"output name is {LOG_FILE_NAME}")
     print(f"output folder is {LOG_FOLDER_PATH}")
-    ROOT_DIR = os.popen("git rev-parse --show-toplevel").read().strip()
 
     with open(f"{ROOT_DIR}/last_log.txt", "w") as file:
         file.write(LOG_FOLDER_PATH if LOG_FILE_NAME != None else "No logging")
 
-    return LOG_FILE_NAME, LOG_FOLDER_PATH, config
+    if args["visualize"] is True:
+        print("Visualiztion enabled")
+        config['output']['visualizer']['enable'] = True
+
+    return LOG_FILE_NAME, LOG_FOLDER_PATH, config, args
 
 def clear_log_file(log_file_path):
     with open(log_file_path, 'w') as file:
@@ -164,14 +170,12 @@ class Simulation:
     iter = 0
 
     def __init__(self, config, results_data, logging_en=True):
-        #------------------------------------------------------------#
-        ###################### Set Up Objects ########################
         self.config = config
         self.results_data = results_data
 
+        #------------------------------------------------------------#
+        ###################### Set Up Objects ########################
         self.fault_module = FaultModule(config)
-        
-
         wheel_module = WheelModule(config, self.fault_module.faults)
         if config['satellite']['euler_init_en']:
             dir_init = Rotation.from_euler('xyz',config['satellite']['euler_init'],degrees=True)
@@ -179,20 +183,21 @@ class Simulation:
             dir_init = Rotation.from_quat(config['satellite']['q_init'])
 
         w_sat_init = np.array([0,0,0])
-
         controller = Controller(faults=self.fault_module.faults, wheel_module=wheel_module, results_data=results_data, w_sat_init=np.zeros(3), q_sat_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
                                     config=config)
-        observer_module = ObserverModule(config, results_data, wheel_module)
-
+        observer_module = ObserverModule(config, wheel_module)
         orbit = Orbit(config)
         magt_module = MagtModule(config, orbit)
+        self.logger = Logger()
+        # self.logger = Logger(config, results_data, self.satellite, logger_fields=None)
+        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, self.logger, orbit=orbit, config=config)
 
-        self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, orbit=orbit, config=config, results_data=results_data, logging_en=logging_en)
-
-        self.fault_module.init(wheel_module.num_wheels)
-
+        #------------------------------------------------------------#
+        ###################### Set Up Initial Conditions ########################
         # Satellite Initial Conditions
         self.satellite.dir_init = dir_init
+        self.fault_module.init(wheel_module.num_wheels)
+        self.logger.init(config, results_data, self.satellite, enable = config['output']['log_enable'] and logging_en, logger_fields=None)
 
         # Adaptive Controller Initialize
         self.satellite.controller.M_inertia_inv_model = self.satellite.M_inertia_inv
@@ -206,10 +211,6 @@ class Simulation:
         # Simulation parameters
         sim_config = config['simulation']
         self.sim_time = sim_config['duration'] if not config['simulation']['test_mode_en'] else sim_config['test_duration']
-        self.sim_output_resolution_time = sim_config['resolution'] if not config['simulation']['test_mode_en'] else sim_config['test_resolution']
-        
-        self.sim_time_series = np.linspace(0, self.sim_time, int(self.sim_time/self.sim_output_resolution_time))
-
         
         if config['simulation']['test_mode_en']:
             print("NB ********* Test Mode is ENABLED *********")
@@ -226,7 +227,7 @@ class Simulation:
             max_step = self.satellite.controller.t_sample
         
         self.sim_time_series = np.arange(0, self.sim_time, max_step)
-        sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
+        sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="LSODA",
                         t_eval=self.sim_time_series,
                         max_step=max_step)
         
@@ -251,7 +252,7 @@ class Simulation:
             
         return sol
 
-    def collect_results(self, sol):
+    def collect_results(self, sol, use_only_sol=False):
         
         for i,axis in enumerate(my_utils.xyz_axes):
             self.results_data[f'w_sat_{axis}'] = interpolate_data(sol.y[i], sol.t, self.sim_time_series)
@@ -277,12 +278,7 @@ class Simulation:
                 # raise(Exception(f"Warning: {key} has length {len(value)} but time has length {len(self.results_data['time'])}"))
         
         self.results_data['time'] = self.sim_time_series
-
-        for i, wheel in enumerate(self.satellite.wheel_module.wheels):
-            self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
-            # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
         
-
         self.results_df = pd.DataFrame.from_dict(self.results_data)
 
         self.results_df['euler_axis_sat'] = self.results_df['q_sat_w'].apply(lambda w: 2*np.arccos(w))
@@ -312,8 +308,12 @@ class Simulation:
         self.results_df['euler_axis_sat_error'] = self.results_df['q_sat_error_w'].apply(lambda w: 2*np.arccos(w))
         self.results_df['euler_axis_sat_error_deg'] = self.results_df['euler_axis_sat_error'] * 180 / np.pi
 
-        for i, wheel in enumerate(self.satellite.wheel_module.wheels):
-            self.results_df[f'f_wheels_error_{i}'] = self.results_df[f'f_wheels_{i}'] - self.results_df[f'f_wheels_est_{i}']
+        if use_only_sol == False:
+            for i, wheel in enumerate(self.satellite.wheel_module.wheels):
+                self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
+                # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
+            for i, wheel in enumerate(self.satellite.wheel_module.wheels):
+                self.results_df[f'f_wheels_error_{i}'] = self.results_df[f'f_wheels_{i}'] - self.results_df[f'f_wheels_est_{i}']
 
         for i,axis in enumerate(my_utils.xyz_axes):
             if self.config['output']['energy_enable']:
@@ -345,7 +345,7 @@ class Simulation:
             self.steady_state = control_info['SteadyStateValue']
 
             q_final = [self.results_data[f'q_sat_{axis}'][-1] for axis in my_utils.q_axes]
-            q_error = my_utils.conv_Rotation_obj_to_numpy_q(self.satellite.ref_q)*np.quaternion(q_final[3], q_final[0], q_final[1], q_final[2]).inverse()
+            q_error = self.satellite.q_ref*np.quaternion(q_final[3], q_final[0], q_final[1], q_final[2]).inverse()
             prin_error = my_utils.get_principal_angle_from_np_quaternion(q_error)
             self.settling_time = control_info['SettlingTime']
             
@@ -495,6 +495,21 @@ class Simulation:
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
             fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.png"), bbox_inches='tight')
 
+    def create_3D_quaternion_plot(self, results_data, config, LOG_FILE_NAME):
+        fig = plt.figure(figsize=(8,8))
+        ax = fig.add_subplot(111, projection='3d')
+        try:
+            ax.plot(results_data['q_sat_x'], results_data['q_sat_y'], results_data['q_sat_z'], label='Satellite Quaternion Trajectory')
+            ax.set_xlabel('q_x')
+            ax.set_ylabel('q_y')
+            ax.set_zlabel('q_z')
+            ax.legend()
+        except Exception as e:
+            print(f"Error plotting 3D quaternion trajectory: {e}")
+        # plt.show()
+        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
+            fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_quaternion_3D_trajectory.png"), bbox_inches='tight')
+
 def generate_rand_rot():
     """Generate a 3D random rotation matrix.
 
@@ -528,25 +543,63 @@ def generate_rand_quat() -> np.quaternion:
     q = q.normalized()
     return q
 
+def calc_cost(gains_list, kwargs):
+    return np.array([kwargs['func'](gains_list[i, :], i, kwargs['config']) for i in range(gains_list.shape[0])])
+
+def Nadafi_BS_controller_param_optimize(gains, particle_num, config):
+    # Calculate Cost
+    results_data_local = {}
+    sim_obj = Simulation(config, results_data = results_data_local, logging_en=False)
+    
+    [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
+        sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
+        sim_obj.satellite.controller.nafadi_controller.L11,
+        sim_obj.satellite.controller.nafadi_controller.L22,
+        sim_obj.satellite.controller.nafadi_controller.lambda_1,
+        sim_obj.satellite.controller.nafadi_controller.lambda_2,
+        sim_obj.satellite.controller.nafadi_controller.lambda_3] = gains
+    sol = sim_obj.simulate_monte_carlo()
+    if sol == np.nan:
+        SSE = 1e6
+    else:
+        SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
+        control_energy = sum(map(lambda i: np.sum(np.abs(sol.y[i+7])), range(3))) # Total control energy
+    
+    cost = SSE + 0.001*control_energy # Weighted cost function combining accuracy and control energy
+    # print(f"Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
+    del sim_obj
+    del results_data_local
+    return cost
+
+# simulation.results_data = {}
+def Nadafi_BS_FNDO_controller_param_optimize(gains, particle_num, config):
+    # Calculate Cost
+    results_data_local = {}
+    sim_obj = Simulation(config, results_data = results_data_local, logging_en=False)
+    
+    [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
+        sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
+        sim_obj.satellite.controller.nafadi_controller.L11,
+        sim_obj.satellite.controller.nafadi_controller.L22,
+        sim_obj.satellite.controller.nafadi_controller.kappa_0,
+        sim_obj.satellite.controller.nafadi_controller.kappa_1,
+        sim_obj.satellite.controller.nafadi_controller.lambda_1,
+        sim_obj.satellite.controller.nafadi_controller.lambda_2,
+        sim_obj.satellite.controller.nafadi_controller.lambda_3] = gains
+    sol = sim_obj.simulate_monte_carlo()
+
+    SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
+    # print(f"Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
+    del sim_obj
+    del results_data_local
+    return SSE
+
+
 def main():
-    LOG_FILE_NAME, LOG_FOLDER_PATH, config = parse_args()
+    LOG_FILE_NAME, LOG_FOLDER_PATH, config, args = parse_args()
     if os.path.exists(LOG_FOLDER_PATH) is False:
         os.mkdir(LOG_FOLDER_PATH)
     results_data = {}
-    results_data["time"] = []
-    results_data["jd"] = []
-    for axis in my_utils.xyz_axes:
-        results_data["T_sat_" + axis] = []
-        results_data["dw_sat_" + axis] = []
-        results_data["w_sat_" + axis] = []
-        results_data['T_dist_' + axis] = []
-    for axis in my_utils.q_axes:
-        results_data["q_sat_" + axis] = []
-
-    simulation = Simulation(config, results_data)
-    satellite = simulation.satellite
-    wheel_module = satellite.wheel_module
-    controller = satellite.controller
     test_mode_en = config['simulation']['test_mode_en']
 
     sim_iter = config['simulation']['iterations']
@@ -554,116 +607,89 @@ def main():
     if config['simulation']['enable']:
         # Run Controller Tuning Setup 
         if config['simulation']['tuning']:
-            # from concurrent.futures import ThreadPoolExecutor
-
-            simulation.satellite.logging_en = False
-            # simulation.results_data = {}
-            def backstepping_controller_param_optimize(gains, simulation):
-                # print(f"running simulation #{simulation.iter}", end='\r', flush=True)
-                # results_data['SSE'] = []
-                # Set up controller gains
-                threads = []
-                sims = []
-                # with ThreadPoolExecutor(max_workers=10) as executor:
-                #     for particle in range(len(gains)):
-                #         [simulation.satellite.controller.alpha,
-                #         simulation.satellite.controller.beta,
-                #         simulation.satellite.controller.k,
-                #         simulation.satellite.controller.eta_1,
-                #         simulation.satellite.controller.upsilon,
-                #         simulation.satellite.controller.c_1,
-                #         simulation.satellite.controller.c_2] = gains[particle]
-
-                #     
-                #     future_to_result = {executor.submit(sim_obj.simulate)}
-                #     for future in concurrent.futures.as_completed(future_to_url):
-                #         try:
-                #             data = future.result()
-
-                for particle in range(len(gains)):
-                        [simulation.satellite.controller.alpha,
-                        simulation.satellite.controller.beta,
-                        simulation.satellite.controller.k,
-                        simulation.satellite.controller.eta_1,
-                        simulation.satellite.controller.upsilon,
-                        simulation.satellite.controller.c_1,
-                        simulation.satellite.controller.c_2] = gains[particle]
-
-                        sim_obj = Simulation(config, simulation.results_data, logging_en=False)
-                        thread = threading.Thread(target=sim_obj.simulate)
-                        thread.daemon = True
-                        thread.start()
-                        threads.append(thread)
-                        sims.append(sim_obj)
-
-                for thread in threads:
-                    thread.join()
-                # Calculate Cost
-                costs = np.zeros(gains.shape[0])
-                for i, sim in enumerate(sims):
-                    SSE = 0 # Sum of squared errors
-                    for i, axis in enumerate(my_utils.q_axes):
-                        SSE += np.linalg.norm(sim.results_data.y[i+3])**2
-                    costs[i] = SSE
-                
-                simulation.iter += 1
-
-
-                # results_data['SSE'].append(simulation.SSE)
-                return SSE
             # Set-up hyperparameters
-            options = {'c1': 0.5, 'c2': 0.3, 'w':0.9}
-            
-            # Create base parameter array
-            base_params = np.array([config['backstepping']['alpha'],
-                                   config['backstepping']['beta'], 
-                                   config['backstepping']['k'],
-                                   config['backstepping']['eta_1'],
-                                   config['backstepping']['upsilon'],
-                                   config['backstepping']['c_1'],
-                                   config['backstepping']['c_2']])
+            options = {'c1': 0.5, 'c2': 0.3, 'w':0.9, }
             
             # Apply function to each particle (column)
-            n_particles = 10
-            initial_guesses = np.column_stack([base_params * (1 + 0.1 * np.random.randn(len(base_params))) for _ in range(n_particles)])
+            n_particles = 8
+            # Gamma_z11 = config['Nadafi']['Gamma_z'][0][0]
+            # Gamma_z22 = config['Nadafi']['Gamma_z'][1][1]
+            # L11 = config['Nadafi']['L'][1][1]
+            # L22 = config['Nadafi']['L'][1][1]
+            if config['controller']['sub_type'] == "Nadafi_BS":
+                initial_guesses = np.array([config['Nadafi']['Gamma_z11'],
+                                config['Nadafi']['Gamma_z22'], 
+                                config['Nadafi']['L11'],
+                                config['Nadafi']['L22'],
+                                config['Nadafi']['lambda_1'], 
+                                config['Nadafi']['lambda_2'], 
+                                config['Nadafi']['lambda_3'], 
+                                ])
+            elif config['controller']['sub_type'] == "Nadafi_FNDO":
+                initial_guesses = np.array([config['Nadafi']['Gamma_z11'],
+                                config['Nadafi']['Gamma_z22'], 
+                                config['Nadafi']['L11'],
+                                config['Nadafi']['L22'], 
+                                config['Nadafi']['kappa_0'],
+                                config['Nadafi']['kappa_1'], 
+                                config['Nadafi']['lambda_1'], 
+                                config['Nadafi']['lambda_2'], 
+                                config['Nadafi']['lambda_3'], 
+                                ])
+            initial_guesses = np.row_stack([initial_guesses * (1 + 0.5 * np.random.randn(len(initial_guesses))) for _ in range(n_particles)])
+
+            optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=initial_guesses.shape[1], options=options, init_pos=initial_guesses)
+            if config['controller']['sub_type'] == "Nadafi_BS":
+                func = Nadafi_BS_controller_param_optimize
+            if config['controller']['sub_type'] == "Nadafi_FNDO":
+                func = Nadafi_BS_FNDO_controller_param_optimize
             
-            # print(f"Initial guesses: {initial_guesses}")
-            optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=len(base_params), options=options, init_pos=initial_guesses.T)
-            cost, gains = optimizer.optimize(backstepping_controller_param_optimize, iters=2, simulation=simulation)
+            cost, gains = optimizer.optimize(calc_cost, iters=30, kwargs={'config': config, 'func': func}, n_processes=min(os.cpu_count(), n_particles))
             print("Finished tuning step")
             print(f"Final Gains: {gains}")
+            print(f"Final Cost: {cost}")
+
+            simulation = Simulation(config, results_data)
+
+            if config['controller']['sub_type'] == "Nadafi_BS":
+                simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
+                simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
+                simulation.satellite.controller.nafadi_controller.L11 = gains[2]
+                simulation.satellite.controller.nafadi_controller.L22 = gains[3]
+                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[4]
+                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[5] 
+                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[6]
+            elif config['controller']['sub_type'] == "Nadafi_FNDO":
+                simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
+                simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
+                simulation.satellite.controller.nafadi_controller.L11 = gains[2]
+                simulation.satellite.controller.nafadi_controller.L22 = gains[3]
+                simulation.satellite.controller.nafadi_controller.kappa_0 = gains[4]
+                simulation.satellite.controller.nafadi_controller.kappa_1 = gains[5] 
+                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[6]
+                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[7]
+                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[8]
             simulation.logging_en = True
-            simulation.simulate()
+
+            print(f"Running simulation with tuned gains: {gains}")
+            simulation.config['simulation']['duration'] = 300
+            sol = simulation.simulate()
             print("Simulation Complete")
-            cols = 2
-            ## Row should be in the form of (row_name, [axes], label)
-            rows = [ ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)'), \
-                    ('q_sat',my_utils.q_axes, 'Quaternion'), \
-                    ('euler_int',['none'], 'Euler integral (deg)'), \
-                    ('euler', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
-                    ('T_sat',my_utils.xyz_axes, 'Torque (Nm)'), \
-                    ('ctr_energy',my_utils.xyz_axes, 'Control Energy (J)'), \
-                    ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (Nm)')]
 
-            if satellite.wheels_control_enable:
-                _axes = [str(wheel.index) for wheel in wheel_module.wheels]
-                rows_2.append(('T_wheels', _axes, 'Wheel Torque (Nm)'))
-                rows_2.append(('w_wheels', _axes, 'Wheel speed (rad/s)'))
-                
-                rows_2 = []        
-                rows_2.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
-                rows_2.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
-                rows_2.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
-
-            simulation.create_plots_separated(rows, results_data, config, LOG_FILE_NAME)
-            simulation.create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME)
-
-            simulation.create_plots_separated(rows_2, results_data, config, LOG_FILE_NAME)
+            simulation.collect_results(sol)
+            rows = [('q_sat',my_utils.q_axes, 'Quaternion')]
+            print("Creating plots of tuned parameters simulation...")
+            simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
 
         else:
             #-------------------------------------------------------------#
             ###################### Simulate System ########################
             if sim_iter == 1:
+                
+                simulation = Simulation(config, results_data)
+                satellite = simulation.satellite
+                wheel_module = satellite.wheel_module
+                controller = satellite.controller
                 print(f"Running Once-off simulation")
                 sol = simulation.simulate()
 
@@ -671,7 +697,7 @@ def main():
                 
                 if (test_mode_en):
                     exit(0)
-                simulation.collect_results(sol)
+                simulation.collect_results(sol, use_only_sol=True)
 
                 simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 
@@ -707,6 +733,7 @@ def main():
                     rows.append(('control_theta',my_utils.xyz_axes))
                 
                 rows_2.append(('q_sat_ref', my_utils.q_axes, 'Reference Quaternion'))
+                # rows_2.append(('q_sat_vec_ref', ['x', 'y', 'z'], 'Reference Quaternion Vector'))
                 rows_2.append(('q_sat_error', my_utils.q_axes, 'Quaternion Error (satellite to reference)'))
                 rows_2.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
                 rows_2.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
@@ -721,6 +748,8 @@ def main():
 
                 simulation.create_plots_separated(rows_2, simulation.results_df, config, LOG_FILE_NAME)
 
+                simulation.create_3D_quaternion_plot(simulation.results_df, config, LOG_FILE_NAME)
+
                 if satellite.wheels_control_enable:
                     simulation.create_plots_comparison([('w_wheels', _axes),
                                         ('w_wheels_est', _axes)
@@ -732,9 +761,17 @@ def main():
                                         ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
 
                     simulation.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                    
+                    simulation.create_plots_comparison([('q_sat', ['x', 'y', 'z']),('q_sat_ref', ['x', 'y', 'z'])], 'Quaternion', 'q_sat_vs_ref_vec', simulation.results_df, config, LOG_FILE_NAME, show=False)
+            
+                if config['output']['visualizer']['enable'] is True:
+                    json_data, results_df = viz.convert_results_df_to_json(simulation.results_df, config['output']['visualizer']['t_sample'])
+                    open(config['output']['visualizer']['file_path'], "w").write(json_data)
             #-------------------------------------------------------------#
             ###################### Monte Carlo ############################
             elif sim_iter > 1:
+                if config['output']['visualizer']['enable'] is True:
+                    print("Visualize is enabled, but Monte Carlo simulation is running. Visualization will be disabled for Monte Carlo simulation.")
                 simulation.monte_carlo = True
                 print(f"Running Monte Carlo simulation with {sim_iter} iterations")
                 def test_q_init(q_init, results=None):

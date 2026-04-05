@@ -1,12 +1,15 @@
+from typing import Tuple
+
 import numpy as np
 from numpy import cos, sin, tan, arccos, arcsin, arctan
 from scipy.spatial.transform import Rotation
 import math
 import quaternion
-import my_utils as my_utils
+import my_utils
 from sgp4.api import Satrec, WGS72
 from astropy.coordinates import get_body, solar_system_ephemeris
 from astropy.time import Time
+from skyfield.api import Timescale, EarthSatellite, load
 
 MU = 398600 # km^3/s^2
 
@@ -27,9 +30,12 @@ class Orbit():
 
     sgp4_sat : Satrec = None
 
-    nBS_B = np.zeros(3) # normalized sun vector
-    nBG_B = np.zeros(3) # normalized earth vector
-    TBO_B = np.zeros((3,3)) # body to orbit frame DCM
+    TOI_I = np.eye(3) # body to orbit frame DCM
+    nSI_I = np.zeros(3) # normalized sun vector in inertial frame
+    nOB_I = np.zeros(3) # normalized orbit vector in inertial frame
+
+    eclipse = False
+    t_sample = 1.0 # seconds
 
     def __init__(self, config):
         altitude = config['orbit']['altitude_km']
@@ -64,15 +70,17 @@ class Orbit():
 
         self.sgp4_sat = Satrec()
 
-        print("Initializing SGP4 satellite with the following parameters:")
-        print("  Altitude:", self.altitude, "km")
-        print("  Radius:", self.radius, "km")
-        print("  JD:", self.jd)
-        print("  RAAN:", self.RAAN)
-        print("  Arg Perigee:", self.arg_perigee)
-        print("  Inclination:", self.inclination)
-        print("  Mean Anomaly:", self.mean_anomaly)
-        print("  Period:", self.period/60, "minutes")
+        if config['simulation']['verbose']:
+            print("Initializing SGP4 satellite with the following parameters:")
+            print("  Altitude:", self.altitude, "km")
+            print("  Radius:", self.radius, "km")
+            print("  JD:", self.jd)
+            print("  RAAN:", self.RAAN)
+            print("  Arg Perigee:", self.arg_perigee)
+            print("  Inclination:", self.inclination)
+            print("  Mean Anomaly:", self.mean_anomaly)
+            print("  Period:", self.period/60, "minutes")
+
         self.sgp4_sat.sgp4init(
             WGS72,
             'i',
@@ -94,85 +102,174 @@ class Orbit():
         self.n_BS_B = r_GS_G/np.linalg.norm(r_GS_G)
         # self.s = 
 
+    next_t_sample: float = 0.0
     # orbital parameters update
     def calc_orbit_state(self, t_runtime):
-        # self.mean_anomaly = 2*np.pi*t_runtime/self.period
-        # self.true_anomaly = self.mean_anomaly  # circular orbit assumption
+        if t_runtime >= self.next_t_sample:
+            self.next_t_sample += self.t_sample
+        else:
+            return
 
-        # s_orf = self.h**2/MU*(1/(1 + self.e*cos(self.true_anomaly)))*np.array(cos(self.true_anomaly),
-        #                                 sin(self.true_anomaly), 0)
-        
-        # v_orf = MU/self.h*np.array(-sin(self.true_anomaly), self.e + cos(self.true_anomaly), 0)
-
-        # # Update RAAN
-        # self.RAAN = self.RAAN_rate*t % (2*np.pi)
-        
-        # R_orf_to_ecef = np.array([[-sin(self.RAAN)*cos(self.inclination)*sin(self.arg_perigee) + cos(self.RAAN)*cos(self.arg_perigee),
-        # cos(self.RAAN)],
-        # []
-        # []])
-
-        # R_3_Omega = np.array([[cos(self.arg_perigee), sin(self.arg_perigee), 0],
-        #                     [-sin(self.arg_perigee), cos(self.arg_perigee), 0],
-        #                     [0, 0, 1]])
-        # R_1_i = np.array([[1, 0, 0],
-        #                 [0, cos(self.inclination), sin(self.inclination)],
-        #                 [0, -sin(self.inclination), cos(self.inclination)]])
-        
-        # R_3_omega = np.array([[cos(self.RAAN), sin(self.RAAN), 0],
-        #                     [-sin(self.RAAN), cos(self.RAAN), 0],
-        #                     [0, 0, 1]])
-
-        # self.s_ecef = R_3_omega @ R_1_i @ R_3_Omega @ s_orf
-
-
-        # self.jd += t_runtime/86400
-        # jd_sans_fr = math.floor(self.jd)
         self.fr = t_runtime/86400
-        jd_total = self.jd + self.fr
-        # print(self.fr, self.jd, jd_total, Time(jd_total, format='jd').datetime.strftime('%Y-%m-%d %H:%M:%S.%f'), sep=" | ")
-        # exit()
+
         error, sBT_T , DTsBT_T = self.sgp4_sat.sgp4(self.jd, self.fr) # sBT_T refers to body position in TEME frame, DTsBT_T refers to velocity in TEME frame
+
+        # Use astropy or manual rotation matrix for TEME->ICRF conversion
+        # For now, keeping in TEME as exact conversion requires additional ephemeris data
         # error, sBT_T , DTsBT_T = self.sgp4_sat.sgp4(self.jd, 0.0)
         if error != 0:
             raise Exception("SGP4 propagation error")
         self.s_eci = np.array(sBT_T)  # km
         self.v_eci = np.array(DTsBT_T)  # km/s
-        self.nTB_B = -self.s_eci/np.linalg.norm(self.s_eci)
+        self.nOB_I = -self.s_eci/np.linalg.norm(self.s_eci)
         x = self.v_eci/np.linalg.norm(self.v_eci)
-        z = self.nTB_B
-        y = my_utils.cross_product(x, z)
-        self.TBO_B = np.array([x, y, z]).T # here the T in TBO_B means tensor and O refers to the orbit frame
+        z = self.nOB_I
+        y = my_utils.cross_product(z, x)
+        self.TOI_I = np.column_stack([x, y, z]) # here the T in TBO_B means transformation and O refers to the orbit frame
+        rST_T, _, _ = self.calc_sun_vector_update()
+        self.nSI_I = rST_T/np.linalg.norm(rST_T)
+        # rSB_T = rST_T - self.s_eci
+        # self.nSB_T = rSB_T/np.linalg.norm(rSB_T)
 
-        # r_GS_G = self.calc_sun_vector_update(t_runtime)
-        # r_BS_B = r_GS_G - r_GB_G
-        # self.n_BS_B = r_BS_B/np.linalg.norm(r_BS_B)
+        self.check_sun_eclipse(self.s_eci, rST_T)
 
-    
-    def calc_sun_vector_update(self, t):
-        with solar_system_ephemeris.set('de440'):
-            r_GS_G = get_body('sun', Time(self.jd + t/86400, format='jd'), 'itrs').cartesian.xyz.to_value()
+
+    def sun_ecliptic_parameters(self, t: float) -> Tuple[float, float, float]:
+        """Compute the mean longitude, mean anomaly, and ecliptic longitude of the Sun.
+
+        References:
+            Vallado: 2022, pp. 283-284
+
+        Args:
+            t (float): Time since J2000 in Julian centuries (e.g. 'tut1' or 'ttdb')
+
+        Returns:
+            tuple: (mean_lon, mean_anomaly, ecliptic_lon)
+                mean_lon (float): Mean longitude of the Sun in radians
+                mean_anomaly (float): Mean anomaly of the Sun in radians
+                ecliptic_lon (float): Ecliptic longitude of the Sun in radians
+        """
+        mean_lon = np.radians(280.46 + 36000.771285 * t) % my_utils.TWOPI
+        mean_anomaly = np.radians(357.528 + 35999.050957 * t) % my_utils.TWOPI
+        ecliptic_lon = (
+            np.radians(
+                np.degrees(mean_lon)
+                + 1.915 * np.sin(mean_anomaly)
+                + 0.02 * np.sin(2 * mean_anomaly)
+            )
+            % my_utils.TWOPI
+        )
+
+        return float(mean_lon), float(mean_anomaly), ecliptic_lon
+
+    def obliquity_ecliptic(self, t: float) -> float:
+        """Compute the obliquity of the ecliptic.
+
+        Args:
+            t (float): Time since J2000 in Julian centuries (e.g. 'tut1' or 'ttdb')
+
+        Returns:
+            float: Obliquity of the ecliptic in radians
+        """
+        return float(np.radians(np.degrees(my_utils.OBLIQUITYEARTH) - 0.0130042 * t))
+        
+    def get_sun_position(self, jd: float) -> Tuple[np.ndarray, float, float]:
+        """Calculates the geocentric equatorial position vector of the Sun.
+
+        This is the low precision formula and is valid for years from 1950 to 2050. The
+        accuaracy of apparent coordinates is about 0.01 degrees.  notice many of the
+        calculations are performed in degrees, and are not changed until later. This is due
+        to the fact that the almanac uses degrees exclusively in their formulations.
+
+        Sergey K (2022) has noted that improved results are found assuming the oputput is in
+        a precessing frame (TEME) and converting to ICRF.
+
+        References:
+            Vallado: 2022, p. 285, Algorithm 29
+
+        Args:
+            jd (float): Julian date (days from 4713 BC)
+
+        Returns:
+            tuple: (rsun, rtasc, decl)
+                rsun (np.ndarray): Inertial sun position vector in km
+                rtasc (float): Right ascension of the sun in radians
+                decl (float): Declination of the sun in radians
+        """
+        # Julian centuries from J2000
+        tut1 = (jd - my_utils.J2000) / my_utils.CENT2DAY
+
+        # Mean anomaly and ecliptic longitude of the sun in radians
+        _, meananomaly, eclplong = self.sun_ecliptic_parameters(tut1)
+
+        # Obliquity of the ecliptic in radians
+        obliquity = self.obliquity_ecliptic(tut1)
+
+        # Magnitude of the Sun vector in AU
+        magr = (
+            1.000140612
+            - 0.016708617 * np.cos(meananomaly)
+            - 0.000139589 * np.cos(2 * meananomaly)
+        )
+
+        # Sun position vector in geocentric equatorial coordinates
+        rsun = np.array(
+            [
+                magr * np.cos(eclplong),
+                magr * np.cos(obliquity) * np.sin(eclplong),
+                magr * np.sin(obliquity) * np.sin(eclplong),
+            ]
+        )
+
+        # Right ascension in radians
+        rtasc = np.arctan(np.cos(obliquity) * np.tan(eclplong))
+
+        # Ensure right ascension is in the same quadrant as ecliptic longitude
+        if eclplong < 0:
+            eclplong += my_utils.TWOPI
+        if abs(eclplong - rtasc) > np.pi / 2:
+            rtasc += 0.5 * np.pi * round((eclplong - rtasc) / (0.5 * np.pi))
+
+        # Declination (radians)
+        decl = np.arcsin(np.sin(obliquity) * np.sin(eclplong))
+
+        return rsun * my_utils.AU2KM, rtasc, decl
+
+    def calc_sun_vector_update(self):
+        rST_T = self.get_sun_position(self.jd + self.fr)
+        # nST_T = rST_T/np.linalg.norm(rST_T)
+        return rST_T 
+
+        # with solar_system_ephemeris.set('de440'):
+            # r_GS_G = get_body('sun', Time(self.jd + t/86400, format='jd'), 'itrs').cartesian.xyz.to_value()
             # r_GS_G = get_body('sun', Time("2026-01-01 00:00:00", format='iso', scale='utc'), None, 'jpl').cartesian.xyz.to_value()
-        return r_GS_G
+        # return r_GS_G
 
     r_GS_G = np.zeros(3)
-    def check_sun_eclipse(self):
 
-        # return True
-        R_earth = 6378e3
-        r_mag = np.linalg.norm(self.s_eci)
-        r_hat = self.s_eci/r_mag
+    def check_sun_eclipse(self, r_sat: np.array, r_sun: np.array) -> bool:
+        """Check if the satellite is in Earth's shadow.
 
-        theta_earth = np.arcsin(R_earth/r_mag)
-        theta_sun = np.arcsin(696340e3/np.linalg.norm(self.r_GS_G))
+        References:
+            Curtis, H.D.: Orbit Mechanics for Engineering Students, 2014, Algorithm 12.3
 
-        cos_phi = r_hat @ self.r_GS_G_hat
-        phi = np.arccos(np.clip(cos_phi, -1.0, 1.0))
+        Args:
+            r_sat (array_like): Satellite position vector in km
+            r_sun (array_like): Sun position vector in km
 
-        if phi < theta_earth - theta_sun:
-            return True  # in eclipse
-        else:
-            return False  # not in eclipse
+        Returns:
+            bool: Whether satellite is in attracting body's shadow
+        """
+        # Calculate angles
+        sun_sat_angle = my_utils.angle_vec(r_sun, r_sat)
+        angle1 = np.arccos(my_utils.RE / np.linalg.norm(r_sat))
+        angle2 = np.arccos(my_utils.RE / np.linalg.norm(r_sun))
+
+        # Check line of sight (no LOS = eclipse)
+        if (angle1 + angle2) <= sun_sat_angle:
+            return True
+
+        return False
         
 class Disturbances():
     orbit : Orbit = None

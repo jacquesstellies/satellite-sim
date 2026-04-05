@@ -167,41 +167,56 @@ class Satellite(Body):
 
         self.calc_M_inertia_inv()
 
+    mode_latch = False
     def update_mode(self):
+        mode_prev = self.mode
         if self.mode == "ref_pointing":
             return
-        if self.orbit.check_sun_eclipse():
-            self.mode = "nominal_night"
-        else:
-            self.mode = "nominal_day"
+        # if self.orbit.eclipse:
+        #     self.mode = "nominal_night"
+        # else:
+        #     self.mode = "nominal_day"
+        if self.init == True:
+            print("MODE STARTUP \t ", self.mode)
+        if self.mode != mode_prev:
+            print("MODE SWITCH \t ", mode_prev, " -> ", self.mode)
 
     t_ref_update = 0
     q_ref_series_index = 0
     init = True
     def update_ref_q(self, t):
+        if self.init and self.mode != "ref_pointing":
+            self.init = False
+            return
         if self.mode == "nominal_day":
-            sun_vec = self.orbit.n_BS_B
+            # nP = np.array([1,0,0]) # body frame x axis
+            # qBI_I = self.qBI
+            # theta_BS = np.arccos(nP @ self.orbit.nSI_I)
+            # nRS = np.cross(nSI_I, nP)
+            #  = self.orbit.nSI_I*np.sin()
+            # qBI = self.q
 
-            z_body = np.array([0,0,1])
-            x_body = sun_vec
-            y_body = my_utils.cross_product(z_body, x_body)
-            r_matrix = np.array([x_body, y_body, z_body]).T
-            self.ref_q = Rotation.from_matrix(r_matrix).as_quat()
+            x_axis = self.orbit.nSI_I
+            y_axis = my_utils.cross_product(self.orbit.nOB_I, x_axis)
+            z_axis = my_utils.cross_product(y_axis, x_axis)
+            self.q_ref = my_utils.conv_numpy_to_Rotation_obj_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis])))
+
+            # self.q_ref = Rotation.from_matrix(r_matrix).as_quat()
 
         if self.mode == "nominal_night":
-            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TBO_B))
-            self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
+            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI_I))
+            # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
 
         if self.mode == "ref_pointing":
             if self.config['satellite']['use_ref_series'] is False:
                 return
-            if self.ref_q_series_index > len(self.ref_t_series)-1:
+            if self.q_ref_series_index > len(self.t_ref_series)-1:
                 return
-            if t >= self.ref_t_series[self.ref_q_series_index]:
-                # print("updating ref q, t=", t, " next t=", self.ref_t_series[self.ref_q_series_index+1], " index=", self.ref_q_series_index)
-                self.ref_q = self.ref_q_series[self.ref_q_series_index]
-                self.ref_q_series_index += 1
-                print("new ref q=", self.ref_q.as_quat())
+            if t >= self.t_ref_series[self.q_ref_series_index]:
+                # print("updating ref q, t=", t, " next t=", self.t_ref_series[self.q_ref_series_index+1], " index=", self.q_ref_series_index)
+                self.q_ref = self.q_ref_series[self.q_ref_series_index]
+                self.q_ref_series_index += 1
+                print("new ref q=", print(self.q_ref), " at t=", t)
     
     def calc_delta_M_inertia(self, t):
         return np.diag(np.array([2*np.sin(0.1*t), 2.8*np.sin(0.2*t), 3.6*np.sin(0.3*t)]))
