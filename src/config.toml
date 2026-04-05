@@ -2,7 +2,7 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 400
+duration = 70
 resolution = 0.1
 test_mode_en = false
 test_duration = 3
@@ -10,6 +10,9 @@ test_resolution = 1
 iterations = 1
 tuning = false
 input_type="ref" # ref, ref_square, torque, sine, square
+log_enable = true
+verbose = true
+# logger_fields = 
 
 [controller]
 enable = true
@@ -17,7 +20,7 @@ c = [ 1, 1, 1,]
 k = 2
 kj = 2
 kd = 4
-ki = 50
+ki = 0
 T_max = 1000
 T_min = 0
 filter_coef = 0
@@ -59,11 +62,12 @@ max_speed_rpm = 10000
 max_torque = 0.2
 num_wheels = 3
 D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
-friction_coef = 0.0001
+friction_coef = 0.000
+saturation_enable = true
 
 [magt]
-mag_moment_max = 150 # Am2
-t_sample = 1
+mag_moment_max = 1000 # Am2
+t_sample = 1.0
 enable = true 
 
 [faults]
@@ -121,6 +125,12 @@ pdf_output_enable = true
 log_file_name_overide = "None"
 separate_plots_display = false
 show_plots = false
+
+[output.visualizer]
+enable = false
+file_path = "/opt/satellite-visualizer/dist/telemetry.json"
+t_sample = 1.0
+# file_path = "/home/jacques/repos/masters/satellite-sim/telemetry-viewer.json"
 
 [satellite.dimensions]
 x = 0.3
