@@ -30,9 +30,9 @@ class Orbit():
 
     sgp4_sat : Satrec = None
 
-    TOI_I = np.eye(3) # body to orbit frame DCM
-    nSI_I = np.zeros(3) # normalized sun vector in inertial frame
-    nOB_I = np.zeros(3) # normalized orbit vector in inertial frame
+    TOI = np.eye(3) # body to orbit frame DCM
+    nSB_I = np.zeros(3) # normalized sun vector in inertial frame
+    nEB_I = np.zeros(3) # normalized orbit vector in inertial frame
 
     eclipse = False
     t_sample = 1.0 # seconds
@@ -121,13 +121,13 @@ class Orbit():
             raise Exception("SGP4 propagation error")
         self.s_eci = np.array(sBT_T)  # km
         self.v_eci = np.array(DTsBT_T)  # km/s
-        self.nOB_I = -self.s_eci/np.linalg.norm(self.s_eci)
+        self.nEB_I = -self.s_eci/np.linalg.norm(self.s_eci)
         x = self.v_eci/np.linalg.norm(self.v_eci)
-        z = self.nOB_I
+        z = self.nEB_I
         y = my_utils.cross_product(z, x)
-        self.TOI_I = np.column_stack([x, y, z]) # here the T in TBO_B means transformation and O refers to the orbit frame
+        self.TOI = np.column_stack([x, y, z]) # here the T in TBO_B means transformation and O refers to the orbit frame
         rST_T, _, _ = self.calc_sun_vector_update()
-        self.nSI_I = rST_T/np.linalg.norm(rST_T)
+        self.nSB_I = rST_T/np.linalg.norm(rST_T)
         # rSB_T = rST_T - self.s_eci
         # self.nSB_T = rSB_T/np.linalg.norm(rSB_T)
 

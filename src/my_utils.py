@@ -201,7 +201,7 @@ def get_quaternion_error_Nadafi(qd : np.quaternion, q : np.quaternion):
                    [qd.x, -qd.w, -1*qd.z, -1*qd.y],
                    [qd.y, qd.z, -1*qd.w, -1*qd.x],
                    [qd.z, -1*qd.y, qd.x, -1*qd.w]])\
-        @ np.array([q.x, q.y, q.z, q.w])
+        @ np.array([q.w, q.x, q.y, q.z])
     return np.quaternion(qe[0], qe[1], qe[2], qe[3])
 
 # assumes scalar-last format

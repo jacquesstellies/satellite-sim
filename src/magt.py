@@ -26,7 +26,7 @@ class MagtModule():
                                                                         np.cos(xi_m),
                                                                         -2*np.sin(alpha-eta_m)*np.sin(xi_m)])
     prev = 0
-    def calc_torque(self, q_err, w_sat, H_sat, t):
+    def calc_torque(self, q_err_vec, w_sat, H_sat, t):
         ## Calculate magnetic torque
         # self.calc_B_field(t)  # t should be passed appropriately
         # m = np.ones(3)*self.config['magt']['mag_moment_max']
@@ -44,6 +44,12 @@ class MagtModule():
                 m = np.ones(3)*self.config['magt']['mag_moment_max']
                 k = 1
                 self.T = my_utils.sat_vec(k*H_sat, 0.01)
+            case "momentum_dump_w_z_axis_simple":
+                km = 1
+                kz = 1
+
+                self.T = my_utils.sat_vec(km*H_sat, 0.01)
+                self.T[2] = -1 * my_utils._sign(q_err_vec[2]) * kz
         # T_magt[2] = T_magt[2] * my_utils._sign(q_err[2]) * k
 
         ## Testing Stuff

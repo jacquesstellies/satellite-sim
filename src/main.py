@@ -303,13 +303,14 @@ class Simulation:
 
         r_sat_error = r_sat_ref * r_sat.inv()
 
-        # print("Final Quaternion Error (satellite to reference): ", r_sat_error.as_quat().T)
         [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = r_sat_error.as_quat().T
+        # [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = self.results_df.apply(lambda row: my_utils.get_quaternion_error_Nadafi(row, ), axis=1).T
         self.results_df['euler_axis_sat_error'] = self.results_df['q_sat_error_w'].apply(lambda w: 2*np.arccos(w))
         self.results_df['euler_axis_sat_error_deg'] = self.results_df['euler_axis_sat_error'] * 180 / np.pi
-
+        print(f"use_only_sol: {use_only_sol}")
         if use_only_sol == False:
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
+                print(f"calculating T_wheels_est_{i}")
                 self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
                 # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
@@ -395,6 +396,7 @@ class Simulation:
 
     def create_plots_separated(self, rows, results_data, config, LOG_FILE_NAME):
         # Create separate figures if enabled in config
+        names = []
         for row in rows:
             row_name, axes, label = row
             fig_separate = plt.figure(figsize=(12,6))
@@ -407,7 +409,8 @@ class Simulation:
                     axis = None
                     name = row_name
                 try:
-                    ax_separate.plot(results_data['time'], results_data[name], label=axis)
+                    ax_separate.plot(results_data['time'], results_data[name], label=name)
+                    names.append(name)
                 except Exception as e:
                     print(f"Error plotting {name}: {e}")
 
@@ -415,7 +418,7 @@ class Simulation:
             ax_separate.set_xlabel('time (s)')
             ax_separate.set_ylabel(label)
             if ax_separate.get_legend_handles_labels()[0] != []:
-                ax_separate.legend()
+                ax_separate.legend(loc='upper right')
             
             if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
                 if not os.path.exists(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs")):
@@ -438,7 +441,7 @@ class Simulation:
                     axis = None
                     name = row_name
                 try:
-                    ax.plot(results_data['time'], results_data[name], label=row_name, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
+                    ax.plot(results_data['time'], results_data[name], label=name, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
                     
                 except Exception as e:
                     print(f"Error plotting {name}: {e}")
@@ -697,7 +700,7 @@ def main():
                 
                 if (test_mode_en):
                     exit(0)
-                simulation.collect_results(sol, use_only_sol=True)
+                simulation.collect_results(sol)
 
                 simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 

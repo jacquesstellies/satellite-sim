@@ -196,15 +196,16 @@ class Satellite(Body):
             #  = self.orbit.nSI_I*np.sin()
             # qBI = self.q
 
-            x_axis = self.orbit.nSI_I
-            y_axis = my_utils.cross_product(self.orbit.nOB_I, x_axis)
-            z_axis = my_utils.cross_product(y_axis, x_axis)
-            self.q_ref = my_utils.conv_numpy_to_Rotation_obj_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis])))
+            x_axis = self.orbit.nSB_I
+            z_axis = self.orbit.nEB_I
+            y_axis = my_utils.cross_product(self.orbit.nEB_I, x_axis)
+        
+            self.q_ref = my_utils.conv_numpy_to_Rotation_obj_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis]).T))
 
             # self.q_ref = Rotation.from_matrix(r_matrix).as_quat()
 
         if self.mode == "nominal_night":
-            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI_I))
+            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOIk))
             # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
 
         if self.mode == "ref_pointing":

@@ -55,7 +55,7 @@ class NadafiController:
         self.b = self.Lambda[2,2] - self.Lambda[0,0]
         self.t_sample = config['controller']['t_sample']
     
-    def calc_output_BS(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array):
+    def calc_output_BS(self, q_err: np.quaternion, w : np.array):
         f_idx = 2 # fault index
         nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
 
@@ -64,6 +64,7 @@ class NadafiController:
 
         Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
         q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
+        # q_err_vec = np.array([q_err.x, q_err.y, q_err.z])
 
         # dq_ref_vec = 0.5 * np.array([q_ref.w, -q_ref.z, q_ref.y], [q_ref.z, q_ref.w, -q_ref.x], [-q_ref.y, q_ref.x, q_ref.w]])@np.array([w_d])
         # w_d = 2(q_ref.w*q_ref_vec)
@@ -73,23 +74,29 @@ class NadafiController:
         # w_r = np.array([w[nf_idx[0]], w[nf_idx[1]]])
 
         w_err = w - C@w_d
-        w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
+        # w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
+        w_err_r = my_utils.col_vec(np.array([w_err[0], w_err[1]]))
+        # w_err_r = np.array([w_err[0], w_err[1]])
 
         dw_d = np.zeros(3)
-        dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
+        # dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
+        dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
 
-        F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
+        F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*my_utils.col_vec([w_err[1], -w_err[0]])
+        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
         # F = np.zeros(2)
 
-        phi = -2*my_utils.col_vec(np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2]))
+        phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
+        # phi = -2*np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
         dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
 
         Z = w_err_r - phi
 
-        u_r = - F + dphi@Aq@(Z+phi) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
-
-        return np.array([u_r[0], u_r[1], 0])
+        u_r = - F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
+        return np.array([u_r[0,0], u_r[1,0], 0])
+        # return np.array([u_r[0], u_r[1], 0])
     
+    ##############################################################################################
     def calc_output_BS_FNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array):
         f_idx = 2 # fault index
         nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
@@ -400,7 +407,7 @@ class Controller:
         
         elif self.config["controller"]["sub_type"] == "Nadafi_BS":
             q_err = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
-            u = self.nafadi_controller.calc_output_BS(q_err, w, self.u_wheels_prev)
+            u = self.nafadi_controller.calc_output_BS(q_err, w)
 
         elif self.sub_type == "Nadafi_MFNDO":
             Gamma_z =  1.5*np.array([[1, 0], [0, 0.8]])
