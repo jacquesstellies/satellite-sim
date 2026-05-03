@@ -86,7 +86,7 @@ class Satellite(Body):
             self.calc_M_inertia_inv()
         else:
             self.calc_M_inertia()
-        self.disturbances = Disturbances(self.orbit)
+        self.disturbances = Disturbances(self.orbit, config)
         self.calc_face_properties()
         self.wheels_control_enable = config['satellite']['wheels_control_enable']
         if not self.wheels_control_enable and self.controller.type == "backstepping" and self.controller.sub_type == "Shen":
@@ -198,7 +198,7 @@ class Satellite(Body):
 
             x_axis = self.orbit.nSB_I
             z_axis = self.orbit.nEB_I
-            y_axis = my_utils.cross_product(self.orbit.nEB_I, x_axis)
+            y_axis = my_utils.cross_product_M31M31(self.orbit.nEB_I, x_axis)
         
             self.q_ref = my_utils.conv_numpy_to_Rotation_obj_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis]).T))
 
@@ -233,6 +233,7 @@ class Satellite(Body):
         self.w = np.array(y[:3])
         self.q = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
         w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
+        dcm = Rotation.from_quat([self.q.x, self.q.y, self.q.z, self.q.w]).as_matrix()
 
         self.update_mode()
         self.update_ref_q(t)
@@ -261,26 +262,19 @@ class Satellite(Body):
         #### Calculate state rates for satellite various subsystems
 
         self.orbit.calc_orbit_state(t)
-        # T_aero = self.disturbances.calc_aero_torque(self, self.q)
-        # T_grav = self.disturbances.calc_grav_torque(self, self.q)
-        # T_dist = (T_aero + T_grav)
 
-        # T_dist = self.disturbances.calc_dist_torque_Nadafi(t)
-        # T_dist = np.zeros(3)
+        self.T_dist = self.disturbances.calc_torque(self, dcm, t)
         # delta_M_inertia = self.calc_delta_M_inertia(t)
         # delta_M_inertia = np.zeros((3,3))
         # M_inertia_effective = self.M_inertia + delta_M_inertia
         # M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
 
         M_inertia_effective_inv = self.M_inertia_inv
-        if self.config['disturbances']['enable'] and self.config['disturbances']['model'] == "Nadafi":
-            self.T_dist = self.disturbances.calc_dist_torque_Nadafi(t)
-        else:
-            self.T_dist = np.zeros(3)
+
         
         Hnet = self.M_inertia@(self.w) + self.wheel_module.H_vec
-        self.dw = (M_inertia_effective_inv)@(self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product(self.w,Hnet)) + self.magt_module.T
-        # dw_sat_result = (self.M_inertia_inv)@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product(self.w,Hnet)) + T_magt
+        self.dw = (M_inertia_effective_inv)@(self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,Hnet)) + self.magt_module.T
+        # dw_sat_result = (self.M_inertia_inv)@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product_M31M31(elf.w,Hnet)) + T_magt
 
         #### Calculate the new satellite body state rates
         inertial_v_q = np.quaternion(0, self.w[0], self.w[1], self.w[2]) # put the inertial velocity in q form

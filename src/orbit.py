@@ -14,12 +14,15 @@ from skyfield.api import Timescale, EarthSatellite, load
 MU = 398600 # km^3/s^2
 
 class Orbit():
+    v_eci = np.zeros(3) # velocity vector in TEME coordinates
+    s_eci = np.zeros(3) # position vector in TEME coordinates
+
+    latitude = 0
+    longditude = 0
+
     altitude = 0 # km
     inclination = 0 # rad
     radius = 0 # km
-
-    v_eci = np.zeros(3) # velocity vector in TEME coordinates
-    s_eci = np.zeros(3) # position vector in TEME coordinates
     RAAN = 0
     v_norm = 0 # km/s
     period = 0 # s
@@ -124,14 +127,16 @@ class Orbit():
         self.nEB_I = -self.s_eci/np.linalg.norm(self.s_eci)
         x = self.v_eci/np.linalg.norm(self.v_eci)
         z = self.nEB_I
-        y = my_utils.cross_product(z, x)
+        y = my_utils.cross_product_M31M31(z, x)
         self.TOI = np.column_stack([x, y, z]) # here the T in TBO_B means transformation and O refers to the orbit frame
         rST_T, _, _ = self.calc_sun_vector_update()
         self.nSB_I = rST_T/np.linalg.norm(rST_T)
         # rSB_T = rST_T - self.s_eci
         # self.nSB_T = rSB_T/np.linalg.norm(rSB_T)
 
-        self.check_sun_eclipse(self.s_eci, rST_T)
+        self.eclipse = self.check_sun_eclipse(self.s_eci, rST_T)
+
+        self.latitude, self.longitude = self.get_lat_lon(self.s_eci, self.jd + self.fr)
 
 
     def sun_ecliptic_parameters(self, t: float) -> Tuple[float, float, float]:
@@ -172,6 +177,28 @@ class Orbit():
             float: Obliquity of the ecliptic in radians
         """
         return float(np.radians(np.degrees(my_utils.OBLIQUITYEARTH) - 0.0130042 * t))
+    
+    def get_lat_lon(self, s_eci: np.ndarray, jd: float) -> Tuple[float, float]:
+        """Convert ECI position to geodetic latitude and longitude.
+        
+        Args:
+            s_eci (np.ndarray): Satellite position in ECI frame (km)
+            jd (float): Julian date
+            
+        Returns:
+            tuple: (latitude, longitude) in radians
+        """
+        from astropy.coordinates import GCRS, CartesianRepresentation, EarthLocation
+        from astropy.time import Time
+        
+        # Create GCRS coordinate from ECI position
+        coord = GCRS(CartesianRepresentation(s_eci[0]*1000, s_eci[1]*1000, s_eci[2]*1000, unit='m'),
+                     obstime=Time(jd, format='jd'))
+        
+        # Convert to EarthLocation (geodetic coordinates)
+        loc = EarthLocation.from_geocentric(*coord.cartesian.xyz)
+        
+        return float(loc.lat.rad), float(loc.lon.rad)
         
     def get_sun_position(self, jd: float) -> Tuple[np.ndarray, float, float]:
         """Calculates the geocentric equatorial position vector of the Sun.
@@ -273,23 +300,39 @@ class Orbit():
         
 class Disturbances():
     orbit : Orbit = None
-    def __init__(self, orbit):
+    T : np.array = np.zeros(3)
+    enable = False
+    model = ""
+
+
+    def __init__(self, orbit, config):
         self.orbit = orbit
-        
-    def calc_aero_torque(self, satellite, q):
+        self.config = config
+        self.model = config['disturbances']['model']
+        self.enable = config['disturbances']['enable']
+        self.sigma_n = 0.8
+        self.sigma_t = 0.8
+
+    sigma_n = 0.8
+    sigma_t = 0.8
+    def calc_aero_torque(self, satellite, dcm):
         aero_angle = np.pi - np.arctan(10)
         w_earth = 7.272e-5
 
-        rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
-        dcm = rotation_obj.as_matrix()
-        va_b = dcm@[-self.orbit.v + w_earth*self.orbit.radius*cos(self.orbit.latitude*cos(aero_angle)),
-                -w_earth*self.orbit.radius*cos(self.orbit.latitude)*sin(aero_angle),
+        va_b = dcm@[-np.linalg.norm(self.orbit.v_eci*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude*cos(aero_angle)),
+                -w_earth*self.orbit.radius*1e3*cos(self.orbit.latitude)*sin(aero_angle),
                 0]
+        
         density_0 = 1.585e-12
+        if self.orbit.eclipse:
+            density_0 = density_0*0.5
+
         density = density_0*np.exp(-(self.orbit.altitude-450e3)/60.828e3)
-        sigma_n = 0.8
-        sigma_t = 0.8
         T_aero = np.zeros(3)
+        print(f"va_b {va_b}")
+        # print(self.orbit.altitude)
+        # print(np.degrees(self.orbit.latitude))
+        # print(np.degrees(self.orbit.longitude))
         # All calcs further assume sbc frame for vectors
         for i, face in enumerate(satellite.faces):
             cos_alpha = (-1)*(face.norm_vec)@va_b
@@ -298,30 +341,55 @@ class Disturbances():
             # print(f"face {i} cos_alpha {cos_alpha} cos_alpha_h {cos_alpha_h}")
             # print(cos_alpha)
             A_p = cos_alpha_h*cos_alpha*face.area
+            # print(f"face {i}  {A_p}")
             # print(f"face {i}  {density*np.power(np.linalg.norm(va_b,2),2)*A_p}")
-            # print(f"face {i}  {(sigma_t*my_utils.cross_product(face.r_cop_to_com,va_b)) + 
+            # print(f"face {i}  {(sigma_t*my_utils.cross_product_M31M31(ace.r_cop_to_com,va_b)) + 
             #                 ((sigma_n*0.05) + (2-sigma_n-sigma_t)*cos_alpha)*
-            #                 my_utils.cross_product(face.r_cop_to_com,-1*face.norm_vec)}")
-            T_aero_tmp = (density*np.power(np.linalg.norm(va_b,2),2)*A_p)*(
-                        (sigma_t*my_utils.cross_product(face.r_cop_to_com,va_b)) + 
-                            ((sigma_n*0.05) + (2-sigma_n-sigma_t)*cos_alpha)*
-                            my_utils.cross_product(face.r_cop_to_com,-1*face.norm_vec)
+            #                 my_utils.cross_product_M31M31(ace.r_cop_to_com,-1*face.norm_vec)}")
+            T_aero_tmp = (density*np.linalg.norm(va_b)**2*A_p)*(
+                        (self.sigma_t*my_utils.cross_product_M31M31(face.r_cop_to_com,va_b)) + 
+                            ((self.sigma_n*0.05) + (2-self.sigma_n-self.sigma_t)*cos_alpha)*
+                            my_utils.cross_product_M31M31(face.r_cop_to_com,-1*face.norm_vec)
                         )
             T_aero += T_aero_tmp
-            # print(T_aero_tmp)
-        # print(my_utils.cross_product(face.r_cop_to_com,va_b))
+            print(f"face {i} T_aero_temp {T_aero_tmp}")
+        # print(my_utils.cross_product_M31M31(ace.r_cop_to_com,va_b))
+        print(f"T_aero {T_aero}")
         return T_aero
     
-    def calc_grav_torque(self, satellite, q):
-        rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
-        dcm = rotation_obj.as_matrix()
+    def calc_grav_torque(self, satellite, dcm):
+        # rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
+        # dcm = rotation_obj.as_matrix()
         u_e = dcm@np.array([0,0,1])
         
-        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product(u_e,satellite.M_inertia@u_e)
-        # print(my_utils.cross_product(u_e,satellite.M_inertia@u_e))
+        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(_e,satellite.M_inertia@u_e)
+        # print(my_utils.cross_product_M31M31(_e,satellite.M_inertia@u_e))
         # print(satellite.M_inertia@u_e)
         return T_grav
 
+    # def calc_solar_radiation_pressure_torque(self, satellite, q):
+    #     rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
+    #     dcm = rotation_obj.as_matrix()
+
+    def calc_torque_model(self, satellite, dcm, t):
+        T_aero = self.calc_aero_torque(satellite, dcm)
+        # T_grav = self.calc_grav_torque(satellite, dcm)
+        T_dist = T_aero #+ T_grav
+        return T_dist
+    
+    def calc_torque(self, satellite, dcm, t):
+        if self.enable:
+            if self.model == "Nadafi":
+                self.T = self.calc_dist_torque_Nadafi(t)
+            elif self.model == "realistic":
+                self.T = self.calc_torque_model(satellite, dcm, t)
+                # self.T_dist = self.disturbances.calc_torque_realistic(t, self, dcm)
+            else:
+                raise Exception("disturbance model not specified")
+        else:
+            self.T = np.zeros(3)
+        return self.T
+        
     def calc_dist_torque_Shen(self, t):
         return np.array([-1, 1, -1])*-0.005*np.sin(t)
     

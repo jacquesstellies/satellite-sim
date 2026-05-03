@@ -33,7 +33,8 @@ class MagtModule():
         # T_magt = np.array([[0, self.B_field[2], -self.B_field[1]], [-self.B_field[2], 0, self.B_field[0]], [self.B_field[1], -self.B_field[0], 0]]) @ m
         # T_magt[0], T_magt[1] = 0, 0
         # control_type = "z-axis_simple"
-        control_type = "momentum_dumping"
+        # control_type = "momentum_dumping"
+        control_type = "momentum_dump_w_z_axis_simple"
         match control_type:
             case "z-axis_simple":
                 self.T = np.zeros(3)
@@ -46,7 +47,7 @@ class MagtModule():
                 self.T = my_utils.sat_vec(k*H_sat, 0.01)
             case "momentum_dump_w_z_axis_simple":
                 km = 1
-                kz = 1
+                kz = 0.001
 
                 self.T = my_utils.sat_vec(km*H_sat, 0.01)
                 self.T[2] = -1 * my_utils._sign(q_err_vec[2]) * kz

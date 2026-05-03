@@ -37,24 +37,38 @@ class NadafiController:
     def __init__(self, config):
         self.config = config
         Nadafi_config = self.config['Nadafi']
-        # self.Gamma_z11 = np.array(Nadafi_config['Gamma_z'])[0][0]
-        # self.Gamma_z22 = np.array(Nadafi_config['Gamma_z'])[1][1]
-        self.Gamma_z = np.array([[Nadafi_config['Gamma_z11'], 0], [0, Nadafi_config['Gamma_z22']]])
-        # self.Gamma_z =  np.array(Nadafi_config['Gamma_z'])
-        # self.L11 = np.array(Nadafi_config['L'])[0][0]
-        # self.L22 = np.array(Nadafi_config['L'])[1][1]
-        self.L = np.array([[Nadafi_config['L11'], 0], [0, Nadafi_config['L22']]])
-        # self.L = np.array(Nadafi_config['L'])
-        self.kappa_0 = Nadafi_config['kappa_0']
-        self.kappa_1 = Nadafi_config['kappa_1']
-        self.Lambda = np.diag([Nadafi_config['lambda_1'], Nadafi_config['lambda_2'], Nadafi_config['lambda_3']])
-        self.lambda_1 = self.Lambda[0,0]
-        self.lambda_2 = self.Lambda[1,1]
-        self.lambda_3 = self.Lambda[2,2]
-        self.a = self.Lambda[1,1] - self.Lambda[2,2]
-        self.b = self.Lambda[2,2] - self.Lambda[0,0]
+        self.Gamma_z11 = np.array(Nadafi_config['Gamma_z11'])
+        self.Gamma_z22 = np.array(Nadafi_config['Gamma_z22'])
+        # self.Gamma_z = np.array([[self.Gamma_z11, 0], [0, self.Gamma_z22]])
+
+        # self.Lambda = np.diag([Nadafi_config['lambda_1'], Nadafi_config['lambda_2'], Nadafi_config['lambda_3']])
+        # if config['simulation']['verbose'] is True:
+        #     print("Gamma_z ", self.Gamma_z)
+        #     print("L ", self.L)
+        #     print("Lambda ", self.Lambda)
+        self.lambda_1 = Nadafi_config['lambda_1']
+        self.lambda_2 = Nadafi_config['lambda_2']
+        self.lambda_3 = Nadafi_config['lambda_3']
+        # self.Lambda = np.diag([self.lambda_1, self.lambda_2, self.lambda_3])
+        self.a = self.lambda_1 - self.lambda_3
+        self.b = self.lambda_3 - self.lambda_1
         self.t_sample = config['controller']['t_sample']
-    
+        if config['simulation']['verbose'] is True:
+            print("Nadafi Controller Gains:")
+            print("Gamma_z11 ", self.Gamma_z11)
+            print("Gamma_z22 ", self.Gamma_z22)
+            print("lambda_1 ", self.lambda_1)
+            print("lambda_2 ", self.lambda_2)
+            print("lambda_3 ", self.lambda_3)
+
+        if self.config['controller']['sub_type'] == 'Nadafi_FNDO':
+            self.L11 = np.array(Nadafi_config['L11'])
+            self.L22 = np.array(Nadafi_config['L22'])
+            # self.L = np.array([[self.L11, 0], [0, self.L22]])
+
+            self.kappa_0 = Nadafi_config['kappa_0']
+            self.kappa_1 = Nadafi_config['kappa_1']
+
     def calc_output_BS(self, q_err: np.quaternion, w : np.array):
         f_idx = 2 # fault index
         nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
@@ -82,17 +96,20 @@ class NadafiController:
         # dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
         dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
 
-        F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*my_utils.col_vec([w_err[1], -w_err[0]])
+        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*my_utils.col_vec([w_err[1], -w_err[0]])
         # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        # F = np.zeros(2)
+        F = np.zeros(2)
 
-        phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
+        phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, 
+                                   self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
         # phi = -2*np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
-        dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
+        dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], 
+                         [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
 
         Z = w_err_r - phi
 
-        u_r = - F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
+        # u_r = - F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
+        u_r = - F + dphi@Aq@(Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
         return np.array([u_r[0,0], u_r[1,0], 0])
         # return np.array([u_r[0], u_r[1], 0])
     
@@ -120,16 +137,18 @@ class NadafiController:
         dw_d = np.zeros(3)
         dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
 
-        F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        # F = np.zeros(2)
+        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
+        F = np.zeros(2)
 
         chi_0 = self.chi_0_prev
         chi_1 = self.chi_1_prev
-        v_0 = -self.kappa_0*diag(np.sqrt(self.L)@np.sqrt(np.abs(chi_0 - w_err_r)))@np.sign(chi_0 - w_err_r) + chi_1
+        L = np.array([[self.L11, 0], [0, self.L22]])
+
+        v_0 = -self.kappa_0*diag(np.sqrt(L)@np.sqrt(np.abs(chi_0 - w_err_r)))@np.sign(chi_0 - w_err_r) + chi_1
 
         dchi_0 = v_0 + u_wheels_prev[nf_idx] + F
-        # dchi_1 = -self.kappa_1 * self.L @ np.sign(chi_1 - v_0)
-        dchi_1 = np.zeros(2)
+        dchi_1 = -self.kappa_1 * L @ np.sign(chi_1 - v_0)
+        # dchi_1 = np.zeros(2)
 
         chi_0 = chi_0 + dchi_0*self.t_sample
         chi_1 = chi_1 + dchi_1*self.t_sample
@@ -142,7 +161,7 @@ class NadafiController:
 
         Z = w_err_r - phi
 
-        u_r = - F - chi_1 + dphi@Aq@(Z+phi) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
+        u_r = - F - chi_1 + dphi@Aq@(Z+phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
         return np.array([u_r[0], u_r[1], 0])
             
 
@@ -295,10 +314,10 @@ class Controller:
         q_int_vec = np.array([q_int.x, q_int.y, q_int.z])
         # Hnet = M_inertia@(w) + H_wheels
 
-        # return + K@q_error_vec - C@w + my_utils.cross_product(w, Hnet)
+        # return + K@q_error_vec - C@w + my_utils.cross_product_M31M31(w, Hnet)
 
-        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w + self.config['controller']['ki']*q_int_vec #+ my_utils.cross_product(w, Hnet)
-        # return my_utils.sat_norm(my_utils.sat_vec(self.config['controller']['kj']*M_inertia@q_error_vec, self.config['wheels']['max_torque']) - self.config['controller']['kd']*M_inertia@w) + self.config['controller']['ki']*q_int_vec + my_utils.cross_product(w, Hnet)
+        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w + self.config['controller']['ki']*q_int_vec #+ my_utils.cross_product_M31M31(w, Hnet)
+        # return my_utils.sat_norm(my_utils.sat_vec(self.config['controller']['kj']*M_inertia@q_error_vec, self.config['wheels']['max_torque']) - self.config['controller']['kd']*M_inertia@w) + self.config['controller']['ki']*q_int_vec + my_utils.cross_product_M31M31(w, Hnet)
     
     h = 0
 

@@ -156,7 +156,7 @@ def parse_args():
     return LOG_FILE_NAME, LOG_FOLDER_PATH, config, args
 
 def clear_log_file(log_file_path):
-    with open(log_file_path, 'w') as file:
+    with open(log_file_path, 'w+') as file:
         file.write("")
 
 class Simulation:
@@ -248,7 +248,11 @@ class Simulation:
                             t_eval=self.sim_time_series,
                             max_step=max_step)
         except DivergentRate:
-            return np.nan
+            # print("divergent rate hit")
+            return -1
+        
+        if sol.status != 0:
+            print(f"Warning: Simulation did not complete successfully, status: {sol.status}")
             
         return sol
 
@@ -382,7 +386,7 @@ class Simulation:
     def log_output_to_file(self, LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en):
         if LOG_FILE_NAME != None and test_mode_en is False:
             LOG_FILE_NAME_RESULTS = LOG_FILE_NAME + "_results"
-            # clear_log_file(fr"{LOG_FOLDER_PATH}/{LOG_FILE_NAME_RESULTS}")
+            clear_log_file(fr"{LOG_FOLDER_PATH}/{LOG_FILE_NAME_RESULTS}")
             # output_dict_to_csv(LOG_FOLDER_PATH, LOG_FILE_NAME + "_log", self.results_data)
             with open(fr'{LOG_FOLDER_PATH}/{LOG_FILE_NAME + "_log"}.csv', 'w+') as file:
                 self.results_df.to_csv(file,sep=',')
@@ -394,7 +398,7 @@ class Simulation:
             log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, self.control_energy_log_output, False)
             log_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME_RESULTS, f"{self.steady_state}", False)
 
-    def create_plots_separated(self, rows, results_data, config, LOG_FILE_NAME):
+    def create_plots_separated(self, rows, results_data, config, LOG_FILE_NAME, file_name_append = ""):
         # Create separate figures if enabled in config
         names = []
         for row in rows:
@@ -423,7 +427,7 @@ class Simulation:
             if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
                 if not os.path.exists(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs")):
                     os.mkdir(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs"))
-                fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}.png"), bbox_inches='tight')
+                fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}{file_name_append}.png"), bbox_inches='tight')
             
             if config['output']['separate_plots_display'] is False:
                 plt.close(fig_separate)
@@ -552,24 +556,27 @@ def calc_cost(gains_list, kwargs):
 def Nadafi_BS_controller_param_optimize(gains, particle_num, config):
     # Calculate Cost
     results_data_local = {}
+    config['simulation']['duration'] = config['tuning']['duration']
     sim_obj = Simulation(config, results_data = results_data_local, logging_en=False)
     
     [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
         sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
-        sim_obj.satellite.controller.nafadi_controller.L11,
-        sim_obj.satellite.controller.nafadi_controller.L22,
         sim_obj.satellite.controller.nafadi_controller.lambda_1,
         sim_obj.satellite.controller.nafadi_controller.lambda_2,
         sim_obj.satellite.controller.nafadi_controller.lambda_3] = gains
     sol = sim_obj.simulate_monte_carlo()
-    if sol == np.nan:
-        SSE = 1e6
+    if sol == -1:
+        cost = 1e9
     else:
         SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
-        control_energy = sum(map(lambda i: np.sum(np.abs(sol.y[i+7])), range(3))) # Total control energy
+        #control_energy = sum(map(lambda i: np.sum(np.abs(sol.y[i+7])), range(3))) # Total control energy
     
-    cost = SSE + 0.001*control_energy # Weighted cost function combining accuracy and control energy
-    # print(f"Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
+        # energy_cost = 0.001*control_energy
+        # steady_state_cost = 2*np.arccos(sol.y[6][-1])*1e3
+        # print(f"SSE Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
+        # print(f"Energy Cost: {energy_cost}")
+        # print(f"Steady State Cost: {steady_state_cost}")
+        cost = SSE #+ 0.001*control_energy + 2*np.arccos(sol.y[6][-1])*1e4 #+ 1e6*(sol.y[0][-1]**2 + sol.y[1][-1]**2 + sol.y[2][-1]**2)  # Weighted cost function combining accuracy and control energy
     del sim_obj
     del results_data_local
     return cost
@@ -582,20 +589,24 @@ def Nadafi_BS_FNDO_controller_param_optimize(gains, particle_num, config):
     
     [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
         sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
+        sim_obj.satellite.controller.nafadi_controller.lambda_1,
+        sim_obj.satellite.controller.nafadi_controller.lambda_2,
+        sim_obj.satellite.controller.nafadi_controller.lambda_3,
         sim_obj.satellite.controller.nafadi_controller.L11,
         sim_obj.satellite.controller.nafadi_controller.L22,
         sim_obj.satellite.controller.nafadi_controller.kappa_0,
-        sim_obj.satellite.controller.nafadi_controller.kappa_1,
-        sim_obj.satellite.controller.nafadi_controller.lambda_1,
-        sim_obj.satellite.controller.nafadi_controller.lambda_2,
-        sim_obj.satellite.controller.nafadi_controller.lambda_3] = gains
+        sim_obj.satellite.controller.nafadi_controller.kappa_1] = gains
     sol = sim_obj.simulate_monte_carlo()
-
-    SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
+    cost = 0
+    if sol == -1:
+        cost = 1e9
+    else:
+        SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
+        cost = SSE
     # print(f"Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
     del sim_obj
     del results_data_local
-    return SSE
+    return cost
 
 
 def main():
@@ -615,72 +626,128 @@ def main():
             
             # Apply function to each particle (column)
             n_particles = 8
-            # Gamma_z11 = config['Nadafi']['Gamma_z'][0][0]
-            # Gamma_z22 = config['Nadafi']['Gamma_z'][1][1]
-            # L11 = config['Nadafi']['L'][1][1]
-            # L22 = config['Nadafi']['L'][1][1]
+            
             if config['controller']['sub_type'] == "Nadafi_BS":
-                initial_guesses = np.array([config['Nadafi']['Gamma_z11'],
+                initial_guess = np.array([config['Nadafi']['Gamma_z11'],
                                 config['Nadafi']['Gamma_z22'], 
-                                config['Nadafi']['L11'],
-                                config['Nadafi']['L22'],
                                 config['Nadafi']['lambda_1'], 
                                 config['Nadafi']['lambda_2'], 
                                 config['Nadafi']['lambda_3'], 
                                 ])
             elif config['controller']['sub_type'] == "Nadafi_FNDO":
-                initial_guesses = np.array([config['Nadafi']['Gamma_z11'],
-                                config['Nadafi']['Gamma_z22'], 
+                initial_guess = np.array([config['Nadafi']['Gamma_z11'],
+                                config['Nadafi']['Gamma_z22'],
+                                config['Nadafi']['lambda_1'], 
+                                config['Nadafi']['lambda_2'], 
+                                config['Nadafi']['lambda_3'],
                                 config['Nadafi']['L11'],
                                 config['Nadafi']['L22'], 
                                 config['Nadafi']['kappa_0'],
                                 config['Nadafi']['kappa_1'], 
-                                config['Nadafi']['lambda_1'], 
-                                config['Nadafi']['lambda_2'], 
-                                config['Nadafi']['lambda_3'], 
                                 ])
-            initial_guesses = np.row_stack([initial_guesses * (1 + 0.5 * np.random.randn(len(initial_guesses))) for _ in range(n_particles)])
 
-            optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=initial_guesses.shape[1], options=options, init_pos=initial_guesses)
+            # bounds = (np.zeros(len(initial_guess)), np.ones(len(initial_guess))*100)
+            bounds = None
+            if config['controller']['sub_type'] == "Nadafi_FNDO" or config['controller']['sub_type'] == "Nadafi_MFNDO":
+                min_bound = -1*np.ones(len(initial_guess))*100
+                max_bound = np.ones(len(initial_guess))*100
+                min_bound[5] = 0
+                min_bound[6] = 0
+                bounds = (min_bound, max_bound)
+
+            initial_guesses = np.row_stack([initial_guess * (1 + 0.5 * np.random.randn(len(initial_guess))) for _ in range(n_particles)])
+            if bounds is not None:
+                for i in range(len(initial_guesses)):
+                    for j in range(len(initial_guess)):
+                        initial_guesses[i][j] = max(initial_guesses[i][j], bounds[0][j]+1e-3) # Ensure initial guess is within bounds
+            initial_guesses[0] = initial_guess # Set the first particle to the initial guess
+
+            optimizer = pyswarms.single.GlobalBestPSO(n_particles=n_particles, dimensions=initial_guesses.shape[1], options=options, init_pos=initial_guesses, bounds=bounds)
             if config['controller']['sub_type'] == "Nadafi_BS":
                 func = Nadafi_BS_controller_param_optimize
             if config['controller']['sub_type'] == "Nadafi_FNDO":
                 func = Nadafi_BS_FNDO_controller_param_optimize
             
-            cost, gains = optimizer.optimize(calc_cost, iters=30, kwargs={'config': config, 'func': func}, n_processes=min(os.cpu_count(), n_particles))
+            cost, gains = optimizer.optimize(calc_cost, iters=config['tuning']['iterations'], kwargs={'config': config, 'func': func}, n_processes=min(os.cpu_count(), n_particles))
             print("Finished tuning step")
             print(f"Final Gains: {gains}")
             print(f"Final Cost: {cost}")
 
+            # if config['controller']['sub_type'] == "Nadafi_BS":
+            #     config['Nadafi']['Gamma_z11'] = gains[0]
+            #     config['Nadafi']['Gamma_z22'] = gains[1]
+            #     config['Nadafi']['L11'] = gains[2]
+            #     config['Nadafi']['L22'] = gains[3]
+            #     config['Nadafi']['lambda_1'] = gains[4]
+            #     config['Nadafi']['lambda_2'] = gains[5] 
+            #     config['Nadafi']['lambda_3'] = gains[6]
+            # elif config['controller']['sub_type'] == "Nadafi_FNDO":
+            #     config['Nadafi']['Gamma_z11'] = gains[0]
+            #     config['Nadafi']['Gamma_z22'] = gains[1]
+            #     config['Nadafi']['L11'] = gains[2]
+            #     config['Nadafi']['L22'] = gains[3]
+            #     config['Nadafi']['kappa_0'] = gains[4]
+            #     config['Nadafi']['kappa_1'] = gains[5] 
+            #     config['Nadafi']['lambda_1'] = gains[6]
+            #     config['Nadafi']['lambda_2'] = gains[7]
+            #     config['Nadafi']['lambda_3'] = gains[8]
+            # else:
+            #     raise Exception(f"Controller sub type {config['controller']['sub_type']} not recognized for tuning")
+
+            config['simulation']['verbose'] = True
             simulation = Simulation(config, results_data)
 
             if config['controller']['sub_type'] == "Nadafi_BS":
                 simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
                 simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                simulation.satellite.controller.nafadi_controller.L11 = gains[2]
-                simulation.satellite.controller.nafadi_controller.L22 = gains[3]
-                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[4]
-                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[5] 
-                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[6]
+                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[2]
+                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[3] 
+                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[4]
             elif config['controller']['sub_type'] == "Nadafi_FNDO":
                 simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
                 simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                simulation.satellite.controller.nafadi_controller.L11 = gains[2]
-                simulation.satellite.controller.nafadi_controller.L22 = gains[3]
-                simulation.satellite.controller.nafadi_controller.kappa_0 = gains[4]
-                simulation.satellite.controller.nafadi_controller.kappa_1 = gains[5] 
-                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[6]
-                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[7]
-                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[8]
+                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[2]
+                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[3]
+                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[4]
+                simulation.satellite.controller.nafadi_controller.L11 = gains[5]
+                simulation.satellite.controller.nafadi_controller.L22 = gains[6]
+                simulation.satellite.controller.nafadi_controller.kappa_0 = gains[7]
+                simulation.satellite.controller.nafadi_controller.kappa_1 = gains[8] 
+            else:
+                raise Exception(f"Controller sub type {config['controller']['sub_type']} not recognized for tuning")
             simulation.logging_en = True
+            # gains = np.array(gains)
+            print(f"Gamma_z11 = {simulation.satellite.controller.nafadi_controller.Gamma_z11}")
+            print(f"Gamma_z22 = {simulation.satellite.controller.nafadi_controller.Gamma_z22}")
+            print(f"lambda_1 = {simulation.satellite.controller.nafadi_controller.lambda_1}")
+            print(f"lambda_2 = {simulation.satellite.controller.nafadi_controller.lambda_2}")
+            print(f"lambda_3 = {simulation.satellite.controller.nafadi_controller.lambda_3}")
+            print(f"L11 = {simulation.satellite.controller.nafadi_controller.L11}")
+            print(f"L22 = {simulation.satellite.controller.nafadi_controller.L22}")
+            print(f"kappa_0 = {simulation.satellite.controller.nafadi_controller.kappa_0}")
+            print(f"kappa_1 = {simulation.satellite.controller.nafadi_controller.kappa_1}")
+
+            with open(fr'{LOG_FOLDER_PATH}/{LOG_FILE_NAME}_tuning_log' + ".txt", 'w+') as file:
+                file.write(f"Final Gains:\n")
+                file.write(f"Gamma_z11 = {simulation.satellite.controller.nafadi_controller.Gamma_z11}\n")
+                file.write(f"Gamma_z22 = {simulation.satellite.controller.nafadi_controller.Gamma_z22}\n")
+                file.write(f"lambda_1 = {simulation.satellite.controller.nafadi_controller.lambda_1}\n")
+                file.write(f"lambda_2 = {simulation.satellite.controller.nafadi_controller.lambda_2}\n")
+                file.write(f"lambda_3 = {simulation.satellite.controller.nafadi_controller.lambda_3}\n")
+                file.write(f"L11 = {simulation.satellite.controller.nafadi_controller.L11}\n")
+                file.write(f"L22 = {simulation.satellite.controller.nafadi_controller.L22}\n")
+                file.write(f"kappa_0 = {simulation.satellite.controller.nafadi_controller.kappa_0}\n")
+                file.write(f"kappa_1 = {simulation.satellite.controller.nafadi_controller.kappa_1}\n")
+                # file.write(f"gamma_mu: {simulation.satellite.controller.nafadi_controller.gamma_mu}\n")
+                file.write(f"Final Cost: {cost}\n")
 
             print(f"Running simulation with tuned gains: {gains}")
-            simulation.config['simulation']['duration'] = 300
+            simulation.sim_time = 300
             sol = simulation.simulate()
             print("Simulation Complete")
 
             simulation.collect_results(sol)
-            rows = [('q_sat',my_utils.q_axes, 'Quaternion')]
+            rows = [('q_sat',my_utils.q_axes, 'Quaternion'), ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)' )]
             print("Creating plots of tuned parameters simulation...")
             simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
 

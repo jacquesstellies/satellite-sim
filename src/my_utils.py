@@ -181,7 +181,7 @@ def quaternion_multiply(q1 : np.array, q2 : np.array):
     w1 = q1[3]
     w2 = q2[3]
     w = w1*w2 - np.dot(qv1, qv2)
-    qv = w1*qv2 + w2*qv1 + cross_product(qv1, qv2)
+    qv = w1*qv2 + w2*qv1 + cross_product_M31M31(qv1, qv2)
 
     # return np.quaternion(w, qv[0], qv[1], qv[2])
     return np.array([qv[0], qv[1], qv[2], w])
@@ -224,7 +224,7 @@ def conv_rads_per_sec_to_rpm(value):
 def low_pass_filter(value, value_prev, coeff):
     return (coeff)*value_prev + (1 - coeff)*value
 
-def cross_product(a, b):
+def cross_product_M31M31(a, b):
     return np.array([a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]])
 
 def mat_multiply_3x3_vec(mat : np.array, vec : np.array):
