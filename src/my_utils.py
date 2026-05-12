@@ -198,7 +198,7 @@ def get_quaternion_error_bong_wie(qc : np.quaternion, qd : np.quaternion):
 def get_quaternion_error_Nadafi(qd : np.quaternion, q : np.quaternion):
 
     qe = np.array([[qd.w, qd.x, qd.y, qd.z],
-                   [qd.x, -qd.w, -1*qd.z, -1*qd.y],
+                   [qd.x, -1*qd.w, -1*qd.z, qd.y],
                    [qd.y, qd.z, -1*qd.w, -1*qd.x],
                    [qd.z, -1*qd.y, qd.x, -1*qd.w]])\
         @ np.array([q.w, q.x, q.y, q.z])

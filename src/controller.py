@@ -50,7 +50,7 @@ class NadafiController:
         self.lambda_2 = Nadafi_config['lambda_2']
         self.lambda_3 = Nadafi_config['lambda_3']
         # self.Lambda = np.diag([self.lambda_1, self.lambda_2, self.lambda_3])
-        self.a = self.lambda_1 - self.lambda_3
+        self.a = self.lambda_2 - self.lambda_3
         self.b = self.lambda_3 - self.lambda_1
         self.t_sample = config['controller']['t_sample']
         if config['simulation']['verbose'] is True:
