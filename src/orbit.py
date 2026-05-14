@@ -17,8 +17,11 @@ class Orbit():
     v_eci = np.zeros(3) # velocity vector in TEME coordinates
     s_eci = np.zeros(3) # position vector in TEME coordinates
 
-    latitude = 0
-    longditude = 0
+    latitude = 0.0
+    longditude = 0.0
+    Dlat = 0.0
+    Dlong = 0.0
+
 
     altitude = 0 # km
     inclination = 0 # rad
@@ -38,10 +41,12 @@ class Orbit():
     nEB_I = np.zeros(3) # normalized orbit vector in inertial frame
 
     eclipse = False
-    t_sample = 1.0 # seconds
+    t_sample = None # seconds
 
     def __init__(self, config):
         altitude = config['orbit']['altitude_km']
+        self.t_sample = config['orbit']['t_sample']
+
         if altitude > 100:
             self.altitude = altitude
         else:
@@ -136,7 +141,12 @@ class Orbit():
 
         self.eclipse = self.check_sun_eclipse(self.s_eci, rST_T)
 
+        lat_prev = self.latitude
+        long_prev = self.longditude
         self.latitude, self.longitude = self.get_lat_lon(self.s_eci, self.jd + self.fr)
+        self.Dlat = (self.latitude - lat_prev)/self.t_sample
+        self.Dlong = (self.longditude - long_prev)/self.t_sample
+
 
 
     def sun_ecliptic_parameters(self, t: float) -> Tuple[float, float, float]:
@@ -303,23 +313,40 @@ class Disturbances():
     T : np.array = np.zeros(3)
     enable = False
     model = ""
-
+    models = ['realistic', 'Nadafi']
+    t_sample = 0.1
 
     def __init__(self, orbit, config):
         self.orbit = orbit
         self.config = config
         self.model = config['disturbances']['model']
+        if self.model not in self.models:
+            raise Exception('Disturbace model not in list')
         self.enable = config['disturbances']['enable']
         self.sigma_n = 0.8
         self.sigma_t = 0.8
+        
+        self.dipole_vec = ([0,0,1])
+        self.t_sample = orbit.t_sample
 
     sigma_n = 0.8
     sigma_t = 0.8
-    def calc_aero_torque(self, satellite, dcm):
-        aero_angle = np.pi - np.arctan(10)
-        w_earth = 7.272e-5
+    init = True
+    def calc_aero_torque(self, satellite, TBI):
 
-        va_b = dcm@[-np.linalg.norm(self.orbit.v_eci*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude*cos(aero_angle)),
+        w_earth = 7.272e-5
+        if self.orbit.Dlong < 0:
+            ratio = self.orbit.Dlat/self.orbit.Dlong
+            aero_angle = np.pi - np.arctan(ratio)
+        elif self.orbit.Dlong == 0:
+            aero_angle = np.pi/2
+        elif self.orbit.Dlong > 0:
+            ratio = self.orbit.Dlat/self.orbit.Dlong
+            aero_angle = -1*np.arctan(ratio)
+
+        TBO = TBI@np.linalg.inv(self.orbit.TOI)
+
+        va_b = TBO@[-np.linalg.norm(self.orbit.v_eci*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude)*cos(aero_angle),
                 -w_earth*self.orbit.radius*1e3*cos(self.orbit.latitude)*sin(aero_angle),
                 0]
         
@@ -327,44 +354,30 @@ class Disturbances():
         if self.orbit.eclipse:
             density_0 = density_0*0.5
 
-        density = density_0*np.exp(-(self.orbit.altitude-450e3)/60.828e3)
+        density = density_0*np.exp(-(self.orbit.altitude-450)/60.828e3)
         T_aero = np.zeros(3)
-        print(f"va_b {va_b}")
-        # print(self.orbit.altitude)
-        # print(np.degrees(self.orbit.latitude))
-        # print(np.degrees(self.orbit.longitude))
+
+        va_b_norm = np.linalg.norm(va_b)
+        va_b_unit = va_b/va_b_norm
+
         # All calcs further assume sbc frame for vectors
         for i, face in enumerate(satellite.faces):
-            cos_alpha = (-1)*(face.norm_vec)@va_b
-
+            cos_alpha = (-1)*(face.norm_vec)@va_b_unit
             cos_alpha_h = np.heaviside(cos_alpha, 1)
-            # print(f"face {i} cos_alpha {cos_alpha} cos_alpha_h {cos_alpha_h}")
-            # print(cos_alpha)
             A_p = cos_alpha_h*cos_alpha*face.area
-            # print(f"face {i}  {A_p}")
-            # print(f"face {i}  {density*np.power(np.linalg.norm(va_b,2),2)*A_p}")
-            # print(f"face {i}  {(sigma_t*my_utils.cross_product_M31M31(ace.r_cop_to_com,va_b)) + 
-            #                 ((sigma_n*0.05) + (2-sigma_n-sigma_t)*cos_alpha)*
-            #                 my_utils.cross_product_M31M31(ace.r_cop_to_com,-1*face.norm_vec)}")
             T_aero_tmp = (density*np.linalg.norm(va_b)**2*A_p)*(
-                        (self.sigma_t*my_utils.cross_product_M31M31(face.r_cop_to_com,va_b)) + 
+                        (self.sigma_t*my_utils.cross_product_M31M31(face.r_com_to_cop,va_b_unit)) + 
                             ((self.sigma_n*0.05) + (2-self.sigma_n-self.sigma_t)*cos_alpha)*
-                            my_utils.cross_product_M31M31(face.r_cop_to_com,-1*face.norm_vec)
+                            my_utils.cross_product_M31M31(face.r_com_to_cop,-1*face.norm_vec)
                         )
             T_aero += T_aero_tmp
-            print(f"face {i} T_aero_temp {T_aero_tmp}")
-        # print(my_utils.cross_product_M31M31(ace.r_cop_to_com,va_b))
-        print(f"T_aero {T_aero}")
+
         return T_aero
     
     def calc_grav_torque(self, satellite, dcm):
-        # rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
-        # dcm = rotation_obj.as_matrix()
         u_e = dcm@np.array([0,0,1])
         
-        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(_e,satellite.M_inertia@u_e)
-        # print(my_utils.cross_product_M31M31(_e,satellite.M_inertia@u_e))
-        # print(satellite.M_inertia@u_e)
+        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
         return T_grav
 
     # def calc_solar_radiation_pressure_torque(self, satellite, q):
@@ -377,7 +390,16 @@ class Disturbances():
         T_dist = T_aero #+ T_grav
         return T_dist
     
+    t_sample_next = 0.0
     def calc_torque(self, satellite, dcm, t):
+        if t >= self.t_sample_next:
+            self.t_sample_next += self.t_sample
+        else:
+            return self.T
+        if self.init:
+            self.init = False
+            return np.zeros(3)
+        
         if self.enable:
             if self.model == "Nadafi":
                 self.T = self.calc_dist_torque_Nadafi(t)
