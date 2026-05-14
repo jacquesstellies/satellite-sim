@@ -14,7 +14,7 @@ from observer import ObserverModule
 class DivergentRate(Exception):
     pass
 class Face():
-    r_cop_to_com = np.zeros(3)
+    r_com_to_cop = np.zeros(3)
     area = 0
     norm_vec = np.zeros(3)
     
@@ -128,17 +128,45 @@ class Satellite(Body):
 
         
     def calc_face_properties(self):
-        dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
-        for i in range(3):
-            for j in range(2):
+        model = self.config['satellite']['dimensions']['model']
+        if model == "rectangular":
+            dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
+            for i in range(3):
+                for j in range(2):
+                    face = Face()
+                    face.norm_vec = np.zeros(3)
+                    face.norm_vec[i] = 1*(1,-1) [j == 1]
+                    face.area = 1
+                    for k, axis in enumerate(face.norm_vec):
+                        if axis == 0:
+                            face.area *= dim_array[k]
+                    face.r_com_to_cop = face.norm_vec*0.5*dim_array              
+                    self.faces.append(face)
+                    print(face.norm_vec, face.area, face.r_com_to_cop)
+        elif model == "EOSSAT":
+            com_to_cop_array = [[0.0, 0.0, 0.995],
+                                [0.0, 0.0, 0.026],
+                                [0.198, 0.348, 0.514],
+                                [0.198, -0.348, 0.514],
+                                [-0.33, 0.0, 0.514],
+                                [-0.165, 0.459, 0.514],
+                                [-0.165, -0.459, 0.514]
+                                ]
+
+            norms_array = [[0, 0, 1], 
+                           [0, 0, -1],
+                           [0.869, 0.495, 0], # (Solar panel)
+                           [0.869, -0.495, 0], # (Solar panel)
+                           [-1, 0, 0],
+                           [-0.82, 0.572, 0],
+                           [-0.82, -0.572, 0]]
+            
+            areas = [0.579, 0.579, 0.763, 0.763, 0.415, 0.519, 0.519]
+            for i in range(len(com_to_cop_array)):
                 face = Face()
-                face.norm_vec = np.zeros(3)
-                face.norm_vec[i] = 1*(1,-1) [j == 1]
-                face.area = 1
-                for k, axis in enumerate(face.norm_vec):
-                    if axis == 0:
-                        face.area *= dim_array[k]
-                face.r_cop_to_com = face.norm_vec*0.5*dim_array              
+                face.r_com_to_cop = np.array(com_to_cop_array[i])
+                face.norm_vec = np.array(norms_array[i])
+                face.area = areas[i]
                 self.faces.append(face)
 
     def calc_M_inertia_body(self):
@@ -205,7 +233,7 @@ class Satellite(Body):
             # self.q_ref = Rotation.from_matrix(r_matrix).as_quat()
 
         if self.mode == "nominal_night":
-            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOIk))
+            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI))
             # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
 
         if self.mode == "ref_pointing":
