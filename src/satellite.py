@@ -33,6 +33,7 @@ class Satellite(Body):
     ref_T = np.zeros(3)
     q_ref_series : list = None
     t_ref_series : list = None
+    w_ref = np.zeros(3)
 
     dir_init = Rotation.from_quat([0,0,0,1])
 
@@ -214,6 +215,7 @@ class Satellite(Body):
     init = True
     def update_ref_q(self, t):
         if self.init and self.mode != "ref_pointing":
+            self.w_ref = np.zeros(3)
             self.init = False
             return
         if self.mode == "nominal_day":
@@ -225,15 +227,18 @@ class Satellite(Body):
             # qBI = self.q
 
             x_axis = self.orbit.nSB_I
-            z_axis = self.orbit.nEB_I
-            y_axis = my_utils.cross_product_M31M31(self.orbit.nEB_I, x_axis)
+            z_axis = self.orbit.nIB_I
+            y_axis = my_utils.cross_product_M31M31(self.orbit.nIB_I, x_axis)
         
-            self.q_ref = my_utils.conv_numpy_to_Rotation_obj_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis]).T))
+            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis]).T))
 
             # self.q_ref = Rotation.from_matrix(r_matrix).as_quat()
 
         if self.mode == "nominal_night":
             self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI))
+            self.q
+            w_OI = np.cross(self.orbit.sBI_I, self.orbit.DIsBI_I) / np.linalg.norm(self.orbit.sBI_I)**2
+            self.w_ref = w_OI
             # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
 
         if self.mode == "ref_pointing":

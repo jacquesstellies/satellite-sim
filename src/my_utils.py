@@ -173,6 +173,12 @@ def conv_Rotation_obj_to_euler_axis_angle(r : Rotation):
     #                   (dcm[0,1] - dcm[1,0])/(4*q4))
     # return q
 
+def conv_quat_to_dcm_nadafi(q : np.quaternion):
+    q0 = q.w
+    q_vec = np.array([q.x, q.y, q.z])
+    return (q0**2 - np.linalg.norm(q_vec))*np.eye(3) + 2*np.outer(q_vec, q_vec) - 2*q0*skew_symmetric(q_vec)
+    # C = (q0**2 - np.linalg.norm(q_vec))*np.eye(3) +  - 2*q0*skew_symmetric(q_vec)
+
 def quaternion_multiply(q1 : np.array, q2 : np.array):
     # w1, x1, y1, z1 = q1[3], q1[0], q1[1], q1[2]
     # w2, x2, y2, z2 = q2.w, q2.x, q2.y, q2.z
@@ -202,7 +208,7 @@ def get_quaternion_error_Nadafi(qd : np.quaternion, q : np.quaternion):
                    [qd.y, qd.z, -1*qd.w, -1*qd.x],
                    [qd.z, -1*qd.y, qd.x, -1*qd.w]])\
         @ np.array([q.w, q.x, q.y, q.z])
-    return np.quaternion(qe[0], qe[1], qe[2], qe[3])
+    return quaternion.from_float_array([qe[0], qe[1], qe[2], qe[3]])
 
 # assumes scalar-last format
 def get_principle_angle_from_array(q):
@@ -243,8 +249,8 @@ def sat_delta(x: float) -> int:
     else:
         return x
 
-def sat_delta_vec(v: np.array) -> np.array:
-    return np.array([sat_delta(v_i) for v_i in v])
+def sat_delta_vec(v: np.array):
+    return np.asmatrix(np.array([sat_delta(v_i) for v_i in np.asarray(v).flatten()])).T
 
 def sat_norm(v: np.array) -> np.array:
     norm = np.linalg.norm(v)

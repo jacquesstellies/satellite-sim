@@ -69,8 +69,8 @@ class Logger:
                     self.results_data['T_sat_'+ axis].append(self.satellite.T_ctr_vec[i])
                     self.results_data['T_dist_' + axis].append(self.satellite.T_dist[i])
                     self.results_data['T_magt_' + axis].append(self.satellite.magt_module.T[i])
-                    self.results_data['s_sat_eci_' + axis].append(self.satellite.orbit.s_eci[i])
-                    self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.v_eci[i])
+                    self.results_data['s_sat_eci_' + axis].append(self.satellite.orbit.sBI_I[i])
+                    self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.DIsBI_I[i])
                     self.results_data['n_sun_' + axis].append(self.satellite.orbit.n_BS_B[i])
                 
                 q_ref = [self.satellite.q_ref.x, self.satellite.q_ref.y, self.satellite.q_ref.z, self.satellite.q_ref.w]

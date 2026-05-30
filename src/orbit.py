@@ -14,8 +14,8 @@ from skyfield.api import Timescale, EarthSatellite, load
 MU = 398600 # km^3/s^2
 
 class Orbit():
-    v_eci = np.zeros(3) # velocity vector in TEME coordinates
-    s_eci = np.zeros(3) # position vector in TEME coordinates
+    DIsBI_I = np.zeros(3) # velocity vector in TEME coordinates
+    sBI_I = np.zeros(3) # position vector in TEME coordinates
 
     latitude = 0.0
     longditude = 0.0
@@ -30,23 +30,34 @@ class Orbit():
     v_norm = 0 # km/s
     period = 0 # s
     arg_perigee = 0 # rad
-    true_anomaly = 0 # rad
+    # true_anomaly = 0 # rad
     jd=np.float64(2461041.5000000) # 2026-01-01 00:00:00 UTC
     fr=np.float64(0.0)
 
     sgp4_sat : Satrec = None
 
-    TOI = np.eye(3) # body to orbit frame DCM
+    TOI = np.eye(3) # inertial to orbit frame DCM
+
+    # rSB_I = np.zeros(3) # sun vector in inertial frame
+    # rIB_I = np.zeros(3) # orbit vector in inertial frame
     nSB_I = np.zeros(3) # normalized sun vector in inertial frame
-    nEB_I = np.zeros(3) # normalized orbit vector in inertial frame
+    nIB_I = np.zeros(3) # normalized orbit vector in inertial frame
 
     eclipse = False
-    t_sample = None # seconds
+    t_sample = 0.1 # seconds
+
+    mean_anomaly = 0.0
+    enable = True
 
     def __init__(self, config):
+        if config['simulation']['tuning']:
+            self.enable = False
         altitude = config['orbit']['altitude_km']
-        self.t_sample = config['orbit']['t_sample']
-
+        if 't_sample' in config['orbit']:
+            self.t_sample = config['orbit']['t_sample']
+        if 'jd_start' in config['orbit']:
+            self.jd = np.float64(config['orbit']['jd_start'])
+        
         if altitude > 100:
             self.altitude = altitude
         else:
@@ -69,12 +80,15 @@ class Orbit():
         
         self.period = 2*np.pi*self.radius/np.sqrt(MU/self.radius)
 
-        self.arg_perigee = np.pi/2
+        # self.arg_perigee = np.pi/2
+        self.arg_perigee = 0
 
         # self.v = np.sqrt(G*m_earth/self.radius)
         # self.v_norm = np.linalg.norm(self.v)
-        self.mean_anomaly = 0
-        self.true_anomaly = 0
+        if 'mean_anomaly_deg' in config['orbit']:
+            self.mean_anomaly = config['orbit']['mean_anomaly_deg'] * np.pi / 180
+
+        # self.true_anomaly = 0
 
         self.sgp4_sat = Satrec()
 
@@ -113,6 +127,8 @@ class Orbit():
     next_t_sample: float = 0.0
     # orbital parameters update
     def calc_orbit_state(self, t_runtime):
+        if not self.enable:
+            return
         if t_runtime >= self.next_t_sample:
             self.next_t_sample += self.t_sample
         else:
@@ -127,23 +143,23 @@ class Orbit():
         # error, sBT_T , DTsBT_T = self.sgp4_sat.sgp4(self.jd, 0.0)
         if error != 0:
             raise Exception("SGP4 propagation error")
-        self.s_eci = np.array(sBT_T)  # km
-        self.v_eci = np.array(DTsBT_T)  # km/s
-        self.nEB_I = -self.s_eci/np.linalg.norm(self.s_eci)
-        x = self.v_eci/np.linalg.norm(self.v_eci)
-        z = self.nEB_I
+        self.sBI_I = np.array(sBT_T)  # km
+        self.DIsBI_I = np.array(DTsBT_T)  # km/s
+        self.nIB_I = -self.sBI_I/np.linalg.norm(self.sBI_I)
+        x = self.DIsBI_I/np.linalg.norm(self.DIsBI_I)
+        z = self.nIB_I
         y = my_utils.cross_product_M31M31(z, x)
-        self.TOI = np.column_stack([x, y, z]) # here the T in TBO_B means transformation and O refers to the orbit frame
-        rST_T, _, _ = self.calc_sun_vector_update()
-        self.nSB_I = rST_T/np.linalg.norm(rST_T)
-        # rSB_T = rST_T - self.s_eci
-        # self.nSB_T = rSB_T/np.linalg.norm(rSB_T)
+        self.TOI = np.column_stack([x, y, z]) # here the T in TOI means transformation and O refers to the orbit frame
+        rSI_I, _, _ = self.calc_sun_vector_update()
 
-        self.eclipse = self.check_sun_eclipse(self.s_eci, rST_T)
+        rSB_I = rSI_I - self.sBI_I
+        self.nSB_I = rSB_I/np.linalg.norm(rSB_I)
+
+        self.eclipse = self.check_sun_eclipse(self.sBI_I, rSI_I)
 
         lat_prev = self.latitude
         long_prev = self.longditude
-        self.latitude, self.longitude = self.get_lat_lon(self.s_eci, self.jd + self.fr)
+        self.latitude, self.longitude = self.get_lat_lon(self.sBI_I, self.jd + self.fr)
         self.Dlat = (self.latitude - lat_prev)/self.t_sample
         self.Dlong = (self.longditude - long_prev)/self.t_sample
 
@@ -188,11 +204,11 @@ class Orbit():
         """
         return float(np.radians(np.degrees(my_utils.OBLIQUITYEARTH) - 0.0130042 * t))
     
-    def get_lat_lon(self, s_eci: np.ndarray, jd: float) -> Tuple[float, float]:
+    def get_lat_lon(self, sBI_I: np.ndarray, jd: float) -> Tuple[float, float]:
         """Convert ECI position to geodetic latitude and longitude.
         
         Args:
-            s_eci (np.ndarray): Satellite position in ECI frame (km)
+            sBI_I (np.ndarray): Satellite position in ECI frame (km)
             jd (float): Julian date
             
         Returns:
@@ -202,7 +218,7 @@ class Orbit():
         from astropy.time import Time
         
         # Create GCRS coordinate from ECI position
-        coord = GCRS(CartesianRepresentation(s_eci[0]*1000, s_eci[1]*1000, s_eci[2]*1000, unit='m'),
+        coord = GCRS(CartesianRepresentation(sBI_I[0]*1000, sBI_I[1]*1000, sBI_I[2]*1000, unit='m'),
                      obstime=Time(jd, format='jd'))
         
         # Convert to EarthLocation (geodetic coordinates)
@@ -273,9 +289,9 @@ class Orbit():
         return rsun * my_utils.AU2KM, rtasc, decl
 
     def calc_sun_vector_update(self):
-        rST_T = self.get_sun_position(self.jd + self.fr)
-        # nST_T = rST_T/np.linalg.norm(rST_T)
-        return rST_T 
+        rSI_I = self.get_sun_position(self.jd + self.fr)
+        # nST_T = rSI_I/np.linalg.norm(rSI_I)
+        return rSI_I 
 
         # with solar_system_ephemeris.set('de440'):
             # r_GS_G = get_body('sun', Time(self.jd + t/86400, format='jd'), 'itrs').cartesian.xyz.to_value()
@@ -319,10 +335,11 @@ class Disturbances():
     def __init__(self, orbit, config):
         self.orbit = orbit
         self.config = config
-        self.model = config['disturbances']['model']
-        if self.model not in self.models:
-            raise Exception('Disturbace model not in list')
         self.enable = config['disturbances']['enable']
+        if self.enable:
+            self.model = config['disturbances']['model']
+            if self.model not in self.models:
+                raise Exception('Disturbace model not in list')
         self.sigma_n = 0.8
         self.sigma_t = 0.8
         
@@ -346,7 +363,7 @@ class Disturbances():
 
         TBO = TBI@np.linalg.inv(self.orbit.TOI)
 
-        va_b = TBO@[-np.linalg.norm(self.orbit.v_eci*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude)*cos(aero_angle),
+        va_b = TBO@[-np.linalg.norm(self.orbit.DIsBI_I*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude)*cos(aero_angle),
                 -w_earth*self.orbit.radius*1e3*cos(self.orbit.latitude)*sin(aero_angle),
                 0]
         
@@ -379,6 +396,14 @@ class Disturbances():
         
         T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
         return T_grav
+
+    # def calc_solar_radiation_pressure_torque(self, satellite, dcm):
+    #     u_s = 
+    # def calc_mag_torque(self, satellite, dcm):
+    #     m = 
+    #     B = self.orbit.calc_magnetic_field(satellite, dcm)
+    #     T_mag = np.cross(m, B)
+    #     return T_mag
 
     # def calc_solar_radiation_pressure_torque(self, satellite, q):
     #     rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)

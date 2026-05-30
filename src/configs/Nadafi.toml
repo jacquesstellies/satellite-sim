@@ -2,7 +2,7 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 100
+duration = 300
 resolution = 0.1
 test_mode_en = false
 test_duration = 3
@@ -12,6 +12,11 @@ tuning = false
 input_type="ref" # ref, ref_square, torque, sine, square
 log_enable = true
 verbose = false
+
+[tuning]
+iterations = 30
+duration = 300
+postive_bounds_en = false
 
 [controller]
 enable = true
@@ -25,7 +30,7 @@ T_min = 0
 filter_coef = 0
 t_sample = 0.1
 type = "backstepping" # pid, backstepping, adaptive
-sub_type = "Nadafi_FNDO" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
+sub_type = "Nadafi_BS" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
 adaptive_gain = 0.1
 detection_en = true
 
@@ -40,51 +45,84 @@ c_2 = 0.1
 
 [Nadafi]
 ## ORIGINAL DONT CHANGE
-Gamma_z11 = 1.5
-Gamma_z22 = 1.2 
-L11 = 10.0
-L22 = 10.0
-kappa_0 = 0.1
-kappa_1 = 0.15
-lambda_1 = 3
-lambda_2 = 3
-lambda_3 = 6
-Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
-
-## Tuned BS
-# Gamma_z11 = 2.83341956
-# Gamma_z22 = 5.54856172 
-# L11 = 0.70753585
-# L22 = 3.9088719
-# lambda_1 = 18.90367711
-# lambda_2 = 0.48283585
-# lambda_3 = 19.6975598
-# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
-## Unused
-# kappa_0 = 0.1
+# Gamma_z11 = 1.5
+# Gamma_z22 = 1.2 
+# lambda_1 = 3
+# lambda_2 = 3
+# lambda_3 = 6
+# kappa_0 = 0.1 
 # kappa_1 = 0.15
+# L11 = 10.0
+# L22 = 10.0
+# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
 
-# Gamma_z = [[9.06857102, 0.0], [0.0, 9.06857102],]
-# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
-# L = [ [ 15.77364414, 0.0,], [ 0.0, 4.19056857,],]
-# kappa_0 = 0.1
-# kappa_1 = 0.15
-# lambda_1 = 16.82618213
-# lambda_2 = 0.48848908
-# lambda_3 = 14.91080406
-# Gamma_z = [[1.18207177, 0.0], [0.0, 1.61654323]] 
-# Gamma_mu = [[0.05, 0.0], [0.0, 0.05],]
-# L = [[10.02877686, 0.0], [0.0, 11.03073246]]
-# kappa_0 = 0.29118643
-# kappa_1 = 0.08459026
-# lambda_1 = 3.32866126
-# lambda_2 = 3.47824203
-# lambda_3 = 6.91771475
+
+## BS Claude Fix Tuning
+# Gamma_z11 = 0.6379086823473993
+# Gamma_z22 = -0.7116849510474996
+# lambda_1 = -0.543771238316344
+# lambda_2 = 1.642067362623053
+# lambda_3 = 18.48065587775774
+
+## Tune_2
+Gamma_z11 = 0.17693559955299276
+Gamma_z22 = -0.8728349081291378
+lambda_1 = -0.012341345587460029
+lambda_2 = 1.315820813420407
+lambda_3 = 20.116485140169125
+
+## BS Manual Tuning
+# Gamma_z11 = 0.6379086823473993
+# Gamma_z22 = -0.7116849510474996
+# lambda_1 = -0.543771238316344
+# lambda_2 = 1.642067362623053
+# lambda_3 = 18.48065587775774
+
+# Tuned FNDO 1
+# Gamma_z11 = 2.195339764604957
+# Gamma_z22 = 1.841572849188609
+# lambda_1 = -0.6020852320471555
+# lambda_2 = -0.5217269855516848
+# lambda_3 = 13.916493478452072
+# L11 = 12.010659647468145
+# L22 = 15.021400624002837
+# kappa_0 = 0.5307474343642878
+# kappa_1 = 0.4169037079119343
+
+# Tuning MFNDO initial
+# Gamma_z11 = 2.195339764604957
+# Gamma_z22 = 1.841572849188609
+# lambda_1 = -0.6020852320471555
+# lambda_2 = -0.5217269855516848
+# lambda_3 = 13.916493478452072
+# L11 = 12.010659647468145
+# L22 = 15.021400624002837
+# kappa_0 = 0.5307474343642878
+# kappa_1 = 0.4169037079119343
+# Gamma_mu11 = 0.05
+# Gamma_mu22 = 0.05
+# alpha_1 = 0.2
+# alpha_2 = 0.3
+
+# Tune 1 MFNDO
+# Gamma_z11 = 4.739669794426801
+# Gamma_z22 = 2.8359759040618817
+# lambda_1 = -1.3566160559257205
+# lambda_2 = -0.78402332779884
+# lambda_3 = 19.07935252381779
+# L11 = 6.148953540397036
+# L22 = 12.809264532020629
+# kappa_0 = 1.0176679869181309
+# kappa_1 = 0.7459949908036154
+# Gamma_mu11 = 1.5702525252242685
+# Gamma_mu22 = 1.8043092705407584
+# alpha_1 = 0.4698816569526004
+# alpha_2 = 1.9180426791705556
 
 [observer]
-enable = true
-feedback_en = true
-t_sample = 0.01
+enable = false
+feedback_en = false
+t_sample = 0.1
 gain = [ 3.00, 0.005, 0.000 ]
 
 [wheels]
@@ -104,10 +142,11 @@ saturation_enable = false
 [magt]
 mag_moment_max = 100 # Am2
 t_sample = 1
-enable = true
+enable = false
+
 
 [faults]
-master_enable = true
+master_enable = false
 
 [fault.0]
 # mul_fault = [ 1.0, 1.0, 1.0, 0.0,]
@@ -128,9 +167,9 @@ time = 100
 master_enable = false
 
 [satellite]
-mode="ref_pointing"
+mode="nominal_night" # nominal_night, nominal_day, ref_pointing
 euler_init_en = true
-euler_init = [ 30, 30, 0,]
+euler_init = [ 10, 2, 0,]
 # euler_init = [ 0, 0, 0,]
 # q_init = [ -0.5, 0.3, 0.4, 0.7071,]
 q_init = [ 0, 0, 0, 1,]
@@ -153,6 +192,7 @@ inertia_override = true
 
 [orbit]
 altitude_km = 500 # km
+t_sample = 0.1
 
 [disturbances]
 enable = false
@@ -174,6 +214,7 @@ file_path = "/opt/satellite-visualizer/dist/telemetry.json"
 t_sample = 1.0
 
 [satellite.dimensions]
+model="EOSSAT" # rectangular, EOSSAT
 x = 0.3
 y = 0.3
 z = 0.3
@@ -185,5 +226,5 @@ inst_time_threshold = 10
 inst_count_threshold = 10
 
 [FDIR.satellite]
-enable = false
+enable = true
 w_max_dps = 600 # deg/s

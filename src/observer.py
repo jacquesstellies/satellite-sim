@@ -165,8 +165,8 @@ class ObserverModule():
     dE = 0
     def calc_state_estimates(self, t : float, state : list[float], u_wheels : list[float]):
         if t >= self.next_t_sample:
-            if self.config['simulation']['test_mode_en'] is True:
-                print("Observer t:", t)
+            # if self.config['simulation']['test_mode_en'] is True:
+            #     print("Observer t:", t)
             self.next_t_sample += self.t_sample
         else:
             return self.E_mul

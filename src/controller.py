@@ -16,8 +16,7 @@ def calc_rotation_matrix_from_quaternion(q: np.quaternion) -> np.array:
 
 
 class NadafiController:
-    chi_0_prev = np.zeros(2)
-    chi_1_prev = np.zeros(2)
+
     Gamma_z11 = 0.0
     Gamma_z22 = 0.0
     Gamma_z = None
@@ -32,17 +31,27 @@ class NadafiController:
     lambda_3 = None
     a = None
     b = None
+    alpha_1 = None
+    alpha_2 = None
+    Gamma_mu11 = None
+    Gamma_mu22 = None
     t_sample = None
+
+    chi_0 = np.asmatrix(np.zeros(2)).T
+    chi_1 = np.asmatrix(np.zeros(2)).T
+    mu = np.asmatrix(np.ones(2)*0.00001).T
     
     def __init__(self, config):
         self.config = config
+        if not config['controller']['sub_type'].startswith("Nadafi"):
+            return
         Nadafi_config = self.config['Nadafi']
         self.Gamma_z11 = np.array(Nadafi_config['Gamma_z11'])
         self.Gamma_z22 = np.array(Nadafi_config['Gamma_z22'])
         # self.Gamma_z = np.array([[self.Gamma_z11, 0], [0, self.Gamma_z22]])
 
         # self.Lambda = np.diag([Nadafi_config['lambda_1'], Nadafi_config['lambda_2'], Nadafi_config['lambda_3']])
-        # if config['simulation']['verbose'] is True:
+        # if conconfigfig['simulation']['verbose'] is True:
         #     print("Gamma_z ", self.Gamma_z)
         #     print("L ", self.L)
         #     print("Lambda ", self.Lambda)
@@ -69,12 +78,27 @@ class NadafiController:
             self.kappa_0 = Nadafi_config['kappa_0']
             self.kappa_1 = Nadafi_config['kappa_1']
 
-    def calc_output_BS(self, q_err: np.quaternion, w : np.array):
+        if self.config['controller']['sub_type'] == 'Nadafi_MFNDO':
+            self.L11 = np.array(Nadafi_config['L11'])
+            self.L22 = np.array(Nadafi_config['L22'])
+            # self.L = np.array([[self.L11, 0], [0, self.L22]])
+
+            self.kappa_0 = Nadafi_config['kappa_0']
+            self.kappa_1 = Nadafi_config['kappa_1']
+
+            self.alpha_1 = Nadafi_config['alpha_1']
+            self.alpha_2 = Nadafi_config['alpha_2']
+            self.Gamma_mu11 = Nadafi_config['Gamma_mu11']
+            self.Gamma_mu22 = Nadafi_config['Gamma_mu22']
+
+    def calc_output_BS(self, q_err: np.quaternion, w : np.array, w_d : np.array):
         f_idx = 2 # fault index
         nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
 
-        C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-        C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+        # C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+        # C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+        C = my_utils.conv_quat_to_dcm_nadafi(q_err)
+        C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
 
         Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
         q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
@@ -82,8 +106,11 @@ class NadafiController:
 
         # dq_ref_vec = 0.5 * np.array([q_ref.w, -q_ref.z, q_ref.y], [q_ref.z, q_ref.w, -q_ref.x], [-q_ref.y, q_ref.x, q_ref.w]])@np.array([w_d])
         # w_d = 2(q_ref.w*q_ref_vec)
-        w_d = np.zeros(3) # desired angular velocity
+        # w_d = np.zeros(3) # desired angular velocity
         # w_d_r = w_d
+        # w_d = my_utils.col_vec(np.zeros(3))
+        w_d = my_utils.col_vec(w_d)
+        w = my_utils.col_vec(w)
 
         # w_r = np.array([w[nf_idx[0]], w[nf_idx[1]]])
 
@@ -92,13 +119,13 @@ class NadafiController:
         w_err_r = my_utils.col_vec(np.array([w_err[0], w_err[1]]))
         # w_err_r = np.array([w_err[0], w_err[1]])
 
-        dw_d = np.zeros(3)
+        dw_d = my_utils.col_vec(np.zeros(3))
         # dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
-        dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
+        dw_d_r = my_utils.col_vec(np.array([[dw_d[0]], [dw_d[1]]]))
 
-        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*my_utils.col_vec([w_err[1], -w_err[0]])
+        F = -C_r@dw_d_r + (C[2,0]*w_d[2,0] + C[2,0]*w_d[1,0])*my_utils.col_vec(np.array([w_err[1,0], -w_err[0,0]]))
         # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        F = np.zeros(2)
+        # F = np.zeros(2)
 
         phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, 
                                    self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
@@ -122,26 +149,27 @@ class NadafiController:
         C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
 
         Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
-        q_err_vec = np.array([q_err.x, q_err.y, q_err.z])
+        q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
 
         # dq_ref_vec = 0.5 * np.array([q_ref.w, -q_ref.z, q_ref.y], [q_ref.z, q_ref.w, -q_ref.x], [-q_ref.y, q_ref.x, q_ref.w]])@np.array([w_d])
         # w_d = 2(q_ref.w*q_ref_vec)
-        w_d = np.zeros(3) # desired angular velocity
+        w = my_utils.col_vec(w)
+        w_d = my_utils.col_vec(np.zeros(3)) # desired angular velocity
         # w_d_r = w_d
 
         # w_r = np.array([w[nf_idx[0]], w[nf_idx[1]]])
 
         w_err = w - C@w_d
-        w_err_r = np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]])
+        w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
 
-        dw_d = np.zeros(3)
-        dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
+        dw_d = my_utils.col_vec(np.zeros(3))
+        dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
 
         # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        F = np.zeros(2)
+        F = my_utils.col_vec(np.zeros(2))
 
-        chi_0 = self.chi_0_prev
-        chi_1 = self.chi_1_prev
+        chi_0 = self.chi_0
+        chi_1 = self.chi_1
         L = np.array([[self.L11, 0], [0, self.L22]])
 
         v_0 = -self.kappa_0*diag(np.sqrt(L)@np.sqrt(np.abs(chi_0 - w_err_r)))@np.sign(chi_0 - w_err_r) + chi_1
@@ -152,18 +180,88 @@ class NadafiController:
 
         chi_0 = chi_0 + dchi_0*self.t_sample
         chi_1 = chi_1 + dchi_1*self.t_sample
-        self.chi_0_prev = chi_0
-        self.chi_1_prev = chi_1
+        self.chi_0 = chi_0
+        self.chi_1 = chi_1
 
-        self.v_0_prev = v_0
-        phi = -2*np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
+        self.v_0 = v_0
+        phi = -2*my_utils.col_vec(np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2]))
         dphi = -2*np.array([[self.lambda_1*q_err.w, self.a*q_err.z, self.a*q_err.y], [self.b*q_err.z, self.lambda_2*q_err.w, self.b*q_err.x]])
 
         Z = w_err_r - phi
 
         u_r = - F - chi_1 + dphi@Aq@(Z+phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
         return np.array([u_r[0], u_r[1], 0])
-            
+    
+    def calc_output_BS_MFNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array):
+        # @TODO implement MFNDO version of Nadafi controller
+        
+        u_wheels_prev = my_utils.col_vec(u_wheels_prev)
+        w = my_utils.col_vec(w)
+
+        f_idx = 2 # fault index
+        nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
+
+        C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+        C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+
+        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
+        q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
+
+        w_d = my_utils.col_vec(np.array([0, 0, 0])) # desired angular velocity
+        w_d_r = w_d
+        w_r = my_utils.col_vec(np.array([w[nf_idx[0]], w[nf_idx[1]]]))
+        
+        w_err = w - C@w_d
+        w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
+
+        dw_d = np.zeros(3)
+        dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
+
+        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
+        F = my_utils.col_vec(np.zeros(2))
+
+        # v_0 = -k_0*diag(np.sqrt(L)@np.sqrt(np.abs(my_utils.col_vec(chi_0) - my_utils.col_vec(w_err_r))))@np.sign(my_utils.col_vec(chi_0) - my_utils.col_vec(w_err_r)) + my_utils.col_vec(chi_1)
+        # v_0 = np.array([v_0[0,0], v_0[1,0]])
+        L = np.diag([self.L11, self.L22])
+        # print(self.chi_0.shape)
+        # print(w_err_r.shape)
+        # print(np.sqrt(L).shape)
+        # print(np.sqrt(np.abs(self.chi_0 - w_err_r)).shape)
+        # print(self.kappa_0)
+        # print(np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r)))
+        v_temp = np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r))
+        self.v_0 = -self.kappa_0*np.diag([v_temp[0,0], v_temp[1,0]])@np.sign(self.chi_0 - w_err_r) + self.chi_1
+        
+        dchi_0 = self.v_0 + u_wheels_prev[nf_idx] + F
+        dchi_1 = -self.kappa_1 * L @ np.sign(self.chi_1 - self.v_0)
+        # dchi_1 = np.zeros(2)
+
+        self.chi_0 = self.chi_0 + dchi_0*self.t_sample
+        self.chi_1 = self.chi_1 + dchi_1*self.t_sample
+
+        phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, 
+                                   self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
+        # phi = -2*np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
+        dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], 
+                         [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
+        Z = w_err_r - phi
+        temp_1 = Aq@(Z+phi)
+        temp_2 = dphi@temp_1
+
+        temp_3 = (self.mu@Z.T)/np.linalg.norm(self.mu)**2
+        temp_4 = my_utils.sat_delta_vec(self.mu)*self.alpha_1
+
+        dmu = temp_3 @ \
+            (temp_4 - F - self.chi_1 + temp_2 - \
+             (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - \
+             np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z) \
+                    - np.diag([self.Gamma_mu11, self.Gamma_mu22])@self.mu      
+
+        self.mu = self.mu + dmu*self.t_sample
+
+        u_r = -1*temp_4 - self.alpha_2*my_utils.sat_delta_vec(Z)
+
+        return np.array([u_r[0,0], u_r[1,0], 0])
 
 class ZarouratiController:
         def __init__(self, config):
@@ -316,7 +414,7 @@ class Controller:
 
         # return + K@q_error_vec - C@w + my_utils.cross_product_M31M31(w, Hnet)
 
-        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w + self.config['controller']['ki']*q_int_vec #+ my_utils.cross_product_M31M31(w, Hnet)
+        return + self.config['controller']['kj']*M_inertia@q_error_vec - self.config['controller']['kd']*M_inertia@w + self.config['controller']['ki']*q_int_vec #+ my_utils.cross_product_M31M31(w, H_wheels)
         # return my_utils.sat_norm(my_utils.sat_vec(self.config['controller']['kj']*M_inertia@q_error_vec, self.config['wheels']['max_torque']) - self.config['controller']['kd']*M_inertia@w) + self.config['controller']['ki']*q_int_vec + my_utils.cross_product_M31M31(w, Hnet)
     
     h = 0
@@ -330,14 +428,16 @@ class Controller:
     c_1 = None
     c_2 = None
 
-    v_0_prev = np.zeros(2)
-    chi_0_prev = np.zeros(2)
-    chi_1_prev = np.zeros(2)
-    # mu_prev = np.zeros(2)
-    mu_prev = np.ones(2) * 0.00001
+    v_0 = np.zeros(2)
+    chi_0 = np.zeros(2)
+    chi_1 = np.zeros(2)
+    # mu = np.zeros(2)
+    mu = np.ones(2) * 0.00001
 
     phi_hat_prev = 0
     e_d_prev = np.zeros(2)
+    we_u_zarourati_prev = None
+    dwe_u_filtered = 0.0
 
     def calc_backstepping_control_torque(self, q_err: np.quaternion, q_curr : np.quaternion, q_ref : np.quaternion, w, satellite, f_est: np.array, t: float):
         
@@ -422,89 +522,18 @@ class Controller:
                 raise(Exception("invalid shape of u"))
                 
         elif self.config["controller"]["sub_type"] == "Nadafi_FNDO":
+           q_err = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
            u = self.nafadi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev)
         
         elif self.config["controller"]["sub_type"] == "Nadafi_BS":
+            # q_err = my_utils.get_quaternion_error_Nadafi(q_ref*np.quaternion(0, 1, 0, 0), q_curr)
             q_err = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
-            u = self.nafadi_controller.calc_output_BS(q_err, w)
+            u = self.nafadi_controller.calc_output_BS(q_err, w, satellite.w_ref)
 
         elif self.sub_type == "Nadafi_MFNDO":
-            Gamma_z =  1.5*np.array([[1, 0], [0, 0.8]])
-            Gamma_mu = 0.5*np.array([[0.01, 0], [0, 0.01]])
-            L = 10*np.eye(2)
-            k_0 = 0.1
-            k = 0.15
-            alpha_1 = 0.2
-            alpha_2 = 0.3
-            Lambda = np.diag([3,3,6])
-            lambda_1 = Lambda[0,0]
-            lambda_2 = Lambda[1,1]
-            lambda_3 = Lambda[2,2]
-            J_0 = satellite.M_inertia
-            a = lambda_2 - lambda_3
-            b = lambda_3 - lambda_1
+            q_err = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
+            u = self.nafadi_controller.calc_output_BS_MFNDO(q_err, w, self.u_wheels_prev)
 
-            f_idx = 2 # fault index
-            nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
-
-            C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-            C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
-
-            Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
-            q_err_vec = np.array([q_err.x, q_err.y, q_err.z])
-
-            w_d = np.zeros(3) # desired angular velocity
-            w_d_r = w_d
-
-            w_r = np.array([w[nf_idx[0]], w[nf_idx[1]]])
-
-            w_err = w - C@w_d
-            w_err_r = np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]])
-
-            dw_d = np.zeros(3)
-            dw_d_r = np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]])
-
-            # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-            F = np.zeros(2)
-
-            chi_0 = self.chi_0_prev
-            chi_1 = self.chi_1_prev
-            # v_0 = -k_0*diag(np.sqrt(L)@np.sqrt(np.abs(my_utils.col_vec(chi_0) - my_utils.col_vec(w_err_r))))@np.sign(my_utils.col_vec(chi_0) - my_utils.col_vec(w_err_r)) + my_utils.col_vec(chi_1)
-            # v_0 = np.array([v_0[0,0], v_0[1,0]])
-            v_0 = -k_0*diag(np.sqrt(L)@np.sqrt(np.abs(chi_0 - w_err_r)))@np.sign(chi_0 - w_err_r) + chi_1
-
-            dchi_0 = v_0 + self.u_wheels_prev[nf_idx] + F
-            dchi_1 = -k * L @ np.sign(chi_1 - v_0)
-            # dchi_1 = np.zeros(2)
-
-            chi_0 = chi_0 + dchi_0*self.t_sample
-            chi_1 = chi_1 + dchi_1*self.t_sample
-            self.chi_0_prev = chi_0
-            self.chi_1_prev = chi_1
-
-            self.v_0_prev = v_0
-            phi = -2*np.array([a*q_err.y*q_err.z + q_err.w*q_err.x*lambda_1, b*q_err.x*q_err.z + q_err.w*q_err.y*lambda_2])
-            dphi_qe = -2*np.array([[lambda_1*q_err.w, a*q_err.z, a*q_err.y], [b*q_err.z, lambda_2*q_err.w, b*q_err.x]])
-
-            Z = w_err_r - phi
-            temp_1 = Aq@(my_utils.col_vec(Z+phi))
-            temp_2 = dphi_qe@temp_1
-
-            temp_3 = my_utils.col_vec(self.mu_prev)@my_utils.row_vec(Z)/np.linalg.norm(self.mu_prev)**2
-            temp_4 = (my_utils.col_vec(my_utils.sat_delta_vec(self.mu_prev))*alpha_1)
-
-            dmu = temp_3 @ \
-                (temp_4 - my_utils.col_vec(F) - my_utils.col_vec(chi_1) + temp_2 - (my_utils.row_vec(q_err_vec) @ Lambda @ Aq).T - Gamma_z @ my_utils.col_vec(Z)) \
-                    - Gamma_mu@my_utils.col_vec(self.mu_prev)
-            dmu = np.array(dmu[0,0], dmu[1,0])
-            
-
-            mu = self.mu_prev + dmu*self.t_sample
-            self.mu_prev = mu
-
-            u_r = -1*alpha_1*my_utils.sat_delta_vec(mu) - alpha_2*my_utils.sat_delta_vec(Z)
-        
-            u = np.array([u_r[0], u_r[1], 0])
         
         elif self.sub_type == "Zarourati":
 
@@ -518,7 +547,7 @@ class Controller:
             # Control Gains [cite: 577, 600]
             k_a = 1.0
             k_u = 0.5
-            k_w = 100.0
+            k_w = 10.0
             k_d = 5.0
             k_phi = 1.0
             # Parameters for auxiliary variable xi [cite: 576]
@@ -556,11 +585,11 @@ class Controller:
 
             
             B = e4 * we_u + q_err.x * w_d[2] - q_err.z * w_d[0] # @TODO generalize for any unactuated_idx
-            de_u = 0.5 * (B - e_a.T @ G1 @ we_a)
+            de_u = 0.5 * (B + e_a.T @ G1 @ we_a)
 
             G2 = np.array([[e4, e_u], [-e_u, e4]])
 
-            de_a = 0.5 * (G2 @ e_a * we_u + G2 @ we_a)
+            de_a = 0.5 * (G1 @ e_a * we_u + G2 @ we_a)
             assert(de_a.shape == (2,1))
             de4 = -0.5 * (e_u * we_u + e_a.T @ we_a)
             de4 = de4[0, 0]
@@ -569,6 +598,14 @@ class Controller:
             dxi = gamma0 * (-gamma1 * np.exp(-gamma1 * t))
             ddxi = gamma0 * gamma1**2 * np.exp(-gamma1 * t)
 
+            # ω̇_eu via finite difference with low-pass filter to suppress derivative spikes
+            if self.we_u_zarourati_prev is None:
+                dwe_u_raw = 0.0
+            else:
+                dwe_u_raw = float(we_u - self.we_u_zarourati_prev) / self.t_sample
+            self.we_u_zarourati_prev = we_u
+            self.dwe_u_filtered = 0.7 * self.dwe_u_filtered + 0.3 * dwe_u_raw
+            dwe_u = self.dwe_u_filtered
 
             # 2. Kinematic Controller terms [cite: 573, 574]
             kappa1 = (1.0 / xi**2) * (k_u * e_u + e4 * we_u)
@@ -578,32 +615,33 @@ class Controller:
             Gamma = 0.5 * (k_a * e4 * e_u + e4 * kappa1 + we_u)
             Gamma = Gamma[0,0]
 
-            dkappa1 = 1/xi**2 * (k_u * de_u + de4 * we_u + e4 * we_u) - 2*dxi/xi**3 * (k_u * e_u + e4 * we_u)
+            dkappa1 = 1/xi**2 * (k_u * de_u + de4 * we_u + e4 * dwe_u) - 2*dxi/xi**3 * (k_u * e_u + e4 * we_u)
             dkappa2 = 2 / (e4**2 * xi ** 2) * (e4 * xi * ddxi - de4 * xi * dxi - e4 * dxi**2) + k_a * de4
             dkappa1 = dkappa1[0,0]
 
-            
             # Assuming e_d follows the oscillator-like eq (24) [cite: 571]
             # Simplified for instant computation as a vector with norm xi
             if t == 0:
-                self.e_d_prev = col_vec(np.ones(2)*xi/2)
-            de_d = dxi/xi*self.e_d_prev + Gamma * G1 @ self.e_d_prev
+                self.e_d_prev = col_vec(np.array([xi/np.sqrt(2), xi/np.sqrt(2)]))  # ||e_d(0)|| = xi satisfies Eq. (24)
+            de_d = (dxi/xi)*self.e_d_prev + Gamma * G1 @ self.e_d_prev
+            print(f"Gamma: {Gamma}, kappa1: {kappa1}, kappa2: {kappa2}, dxi: {dxi}, xi: {xi}")
             assert(de_d.shape == (2,1))
             e_d = self.e_d_prev + de_d * self.t_sample
             assert(e_d.shape == (2,1))
             self.e_d_prev = e_d
+            print(f"e_d: {e_d.flatten()}")
             
             # Virtual control input uk 
             u_k = -k_a * e4 * e_a + kappa1 * (G1 @ e_d) + kappa2 * e_d
             assert(u_k.shape == (2,1))
-            du_k = -k_a * de4 * e_a - k_a * e4 * de_a + (dkappa1 * G1 @ e_d + dkappa2 * e_d) + (kappa1 * G1 @ de_d + dkappa2 * de_d)
-            print("(dkappa1 * G1 @ e_d + dkappa2 * e_d): ", (dkappa1 * G1 @ e_d + dkappa2 * e_d))
-            print("(kappa1 * G1 @ de_d + dkappa2 * de_d): ", (kappa1 * G1 @ de_d + dkappa2 * de_d))
-            print("de4 * e_a: ", de4 * e_a)
-            print("dkappa1: ", dkappa1)
-            print("dkappa2: ", dkappa2)
-            print("kappa1: ", kappa1)
-            print("kappa2: ", kappa2)
+            du_k = -k_a * de4 * e_a - k_a * e4 * de_a + (dkappa1 * G1 @ e_d + dkappa2 * e_d) + (kappa1 * G1 @ de_d + kappa2 * de_d)
+            # print("(dkappa1 * G1 @ e_d + dkappa2 * e_d): ", (dkappa1 * G1 @ e_d + dkappa2 * e_d))
+            # print("(kappa1 * G1 @ de_d + dkappa2 * de_d): ", (kappa1 * G1 @ de_d + dkappa2 * de_d))
+            # print("de4 * e_a: ", de4 * e_a)
+            # print("dkappa1: ", dkappa1)
+            # print("dkappa2: ", dkappa2)
+            # print("kappa1: ", kappa1)
+            # print("kappa2: ", kappa2)
             
             assert(du_k.shape == (2, 1))
             
@@ -619,7 +657,7 @@ class Controller:
 
             Swe_r = Sw_r
 
-            H = satellite.M_inertia @ w - col_vec(self.wheel_module.H_vec)
+            H = satellite.M_inertia @ w + col_vec(self.wheel_module.H_vec)
             # print(f"H.shape: {H.shape}")
             H_r = H[actuated_idx]
             assert(H_r.shape == (2,1))
@@ -628,12 +666,9 @@ class Controller:
             e_a_tilde = e_d - e_a
             assert(e_a_tilde.shape == (2,1))
             
-            # 6. Adaptive update law for phi_hat 
-            # self.phi_hat_prev = my_utils.col_vec(np.zeros(2))
-            self.phi_hat_prev = 0
-            # phi_hat_dot = (k_phi / k_d) * (np.cosh(self.phi_hat_prev)**2) * np.linalg.norm(eta)
-            # print(f"self.phi_hat_prev: {self.phi_hat_prev}")
-            # self.phi_hat_prev = self.phi_hat_prev + phi_hat_dot * self.t_sample
+            # 6. Adaptive update law for phi_hat (Eq. 29)
+            phi_hat_dot = (k_phi / k_d) * (np.cosh(self.phi_hat_prev)**2) * float(np.linalg.norm(eta))
+            self.phi_hat_prev = self.phi_hat_prev + phi_hat_dot * self.t_sample
 
             # 5. Final Control Law uc^r [cite: 598]
             # print("e4: ", e4)
@@ -641,7 +676,7 @@ class Controller:
             # print("1: ", (Swe_r @ H_r))
             # print("2: ", (J_r @ Sw_r @ A_r @ w_d_r))
             # print("3: ", (J_r @ A_r @ dw_d_r))
-            print("du_k: ", du_k)
+            # print("du_k: ", du_k)
             # print("4: ", (J_r @ du_k))
             # print("5: ", (k_w * np.tanh(eta)))
             # print("6: ", (0.5 * G1 @ e_a * e_u))
@@ -651,10 +686,12 @@ class Controller:
 
             u_c_r = C_r @ (Swe_r @ H_r - J_r @ Sw_r @ A_r @ w_d_r + J_r @ A_r @ dw_d_r + J_r @ du_k + k_w * np.tanh(eta)\
                            + 0.5 * G1 @ e_a * e_u + 0.5 * e_a_tilde + k_d * np.sign(eta) * np.tanh(self.phi_hat_prev))
-                           
-            print(f"u_c_r: {u_c_r}")
-            u[actuated_idx[0]] = u_c_r[0,0]
-            u[actuated_idx[1]] = u_c_r[1,0]
+
+            u_max = self.config['wheels']['max_torque']
+            u_c_r = np.clip(np.asarray(u_c_r), -u_max, u_max)
+
+            u[actuated_idx[0]] = u_c_r[0, 0]
+            u[actuated_idx[1]] = u_c_r[1, 0]
             u[unactuated_idx] = 0 # No control input for actuated axes in this formulation
 
         return u
