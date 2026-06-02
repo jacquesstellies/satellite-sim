@@ -196,17 +196,17 @@ class Satellite(Body):
 
         self.calc_M_inertia_inv()
 
-    mode_latch = False
     def update_mode(self):
         mode_prev = self.mode
+        if self.init == True:
+            print("MODE STARTUP \t ", self.mode)
         if self.mode == "ref_pointing":
             return
         # if self.orbit.eclipse:
         #     self.mode = "nominal_night"
         # else:
         #     self.mode = "nominal_day"
-        if self.init == True:
-            print("MODE STARTUP \t ", self.mode)
+
         if self.mode != mode_prev:
             print("MODE SWITCH \t ", mode_prev, " -> ", self.mode)
 
@@ -242,6 +242,8 @@ class Satellite(Body):
             # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
 
         if self.mode == "ref_pointing":
+            if self.init == True:
+                self.init = False
             if self.config['satellite']['use_ref_series'] is False:
                 return
             if self.q_ref_series_index > len(self.t_ref_series)-1:
@@ -305,8 +307,8 @@ class Satellite(Body):
         M_inertia_effective_inv = self.M_inertia_inv
 
         
-        Hnet = self.M_inertia@(self.w) + self.wheel_module.H_vec
-        self.dw = (M_inertia_effective_inv)@(self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,Hnet)) + self.magt_module.T
+        self.H = self.M_inertia@(self.w) + self.wheel_module.H_vec
+        self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,self.H) + self.magt_module.T)
         # dw_sat_result = (self.M_inertia_inv)@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product_M31M31(elf.w,Hnet)) + T_magt
 
         #### Calculate the new satellite body state rates

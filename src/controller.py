@@ -40,6 +40,8 @@ class NadafiController:
     chi_0 = np.asmatrix(np.zeros(2)).T
     chi_1 = np.asmatrix(np.zeros(2)).T
     mu = np.asmatrix(np.ones(2)*0.00001).T
+
+    config = None
     
     def __init__(self, config):
         self.config = config
@@ -95,6 +97,8 @@ class NadafiController:
         f_idx = 2 # fault index
         nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
 
+        J_0_r = np.array(self.config['satellite']['M_Inertia'])[nf_idx][:, nf_idx]
+
         # C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
         # C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
         C = my_utils.conv_quat_to_dcm_nadafi(q_err)
@@ -112,7 +116,7 @@ class NadafiController:
         w_d = my_utils.col_vec(w_d)
         w = my_utils.col_vec(w)
 
-        # w_r = np.array([w[nf_idx[0]], w[nf_idx[1]]])
+        w_r = np.array([w[nf_idx[0],0], w[nf_idx[1],0]])
 
         w_err = w - C@w_d
         # w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
@@ -137,7 +141,10 @@ class NadafiController:
 
         # u_r = - F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
         u_r = - F + dphi@Aq@(Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
-        return np.array([u_r[0,0], u_r[1,0], 0])
+        
+
+        h_w = -1*J_0_r @ u_r #+ np.skew_symmetric(w_r) @ J_0_r @ w_r
+        return np.array([h_w[0,0], h_w[1,0], 0])
         # return np.array([u_r[0], u_r[1], 0])
     
     ##############################################################################################
