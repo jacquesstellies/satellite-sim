@@ -176,7 +176,7 @@ def conv_Rotation_obj_to_euler_axis_angle(r : Rotation):
 def conv_quat_to_dcm_nadafi(q : np.quaternion):
     q0 = q.w
     q_vec = np.array([q.x, q.y, q.z])
-    return (q0**2 - np.linalg.norm(q_vec))*np.eye(3) + 2*np.outer(q_vec, q_vec) - 2*q0*skew_symmetric(q_vec)
+    return (q0**2 - np.linalg.norm(q_vec)**2)*np.eye(3) + 2*np.outer(q_vec, q_vec) - 2*q0*skew_symmetric(q_vec)
     # C = (q0**2 - np.linalg.norm(q_vec))*np.eye(3) +  - 2*q0*skew_symmetric(q_vec)
 
 def quaternion_multiply(q1 : np.array, q2 : np.array):
@@ -232,6 +232,9 @@ def low_pass_filter(value, value_prev, coeff):
 
 def cross_product_M31M31(a, b):
     return np.array([a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]])
+
+def cross_product_M21M21(a, b):
+    return np.array([a[0]*b[1] - a[1]*b[0]])
 
 def mat_multiply_3x3_vec(mat : np.array, vec : np.array):
     return np.array([mat[0,0]*vec[0] + mat[0,1]*vec[1] + mat[0,2]*vec[2],
