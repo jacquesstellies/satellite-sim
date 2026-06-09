@@ -8,12 +8,16 @@ class MagtModule():
     config : dict = None
     orbit : Orbit = None
     T = np.zeros(3)
+    mode = None
 
     B_field = np.zeros(3)
     def __init__(self, config, orbit):
         self.config = config
         self.orbit = orbit
         self.enable = self.config['magt']['enable']
+        if self.config['magt']['enable']:
+            self.mode = self.config['magt']['mode']
+        
     
     def calc_B_field(self, t):
         # Placeholder for magnetic field calculation
@@ -27,15 +31,14 @@ class MagtModule():
                                                                         -2*np.sin(alpha-eta_m)*np.sin(xi_m)])
     prev = 0
     def calc_torque(self, q_err_vec, w_sat, H_sat, t):
+        if not self.enable:
+            return
         ## Calculate magnetic torque
         # self.calc_B_field(t)  # t should be passed appropriately
         # m = np.ones(3)*self.config['magt']['mag_moment_max']
         # T_magt = np.array([[0, self.B_field[2], -self.B_field[1]], [-self.B_field[2], 0, self.B_field[0]], [self.B_field[1], -self.B_field[0], 0]]) @ m
         # T_magt[0], T_magt[1] = 0, 0
-        # control_type = "z-axis_simple"
-        # control_type = "momentum_dumping"
-        control_type = "momentum_dump_w_z_axis_simple"
-        match control_type:
+        match self.mode:
             case "z-axis_simple":
                 self.T = np.zeros(3)
                 k = 1
@@ -44,7 +47,7 @@ class MagtModule():
             case "momentum_dumping":
                 m = np.ones(3)*self.config['magt']['mag_moment_max']
                 k = 1
-                self.T = my_utils.sat_vec(k*H_sat, 0.01)
+                self.T = -1 * my_utils.sat_vec(k*H_sat, 0.01)
             case "momentum_dump_w_z_axis_simple":
                 km = 1
                 kz = 0.001

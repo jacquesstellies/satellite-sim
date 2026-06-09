@@ -287,11 +287,10 @@ class Satellite(Body):
 
             self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, self.q, self.w, self.q_ref, self, w_wheels_input, f_est)
 
-        if self.magt_module.enable is True:
-            q_sat_err =  self.q.inverse() * self.q_ref
-            q_err_vec = np.array([q_sat_err.x, q_sat_err.y, q_sat_err.z])
-            self.magt_module.calc_torque(q_err_vec, self.w, self.M_inertia@(self.w) + self.wheel_module.H_vec, t)
-
+        q_sat_err =  self.q_ref * self.q.inverse()
+        q_err_vec = np.array([q_sat_err.x, q_sat_err.y, q_sat_err.z])
+        
+        self.magt_module.calc_torque(q_err_vec, self.w, self.H + self.wheel_module.H_vec, t)
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
         if self.observer_module.enable is True:
