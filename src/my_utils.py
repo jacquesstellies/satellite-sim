@@ -278,9 +278,11 @@ def sat_vec(v: np.array, max: float) -> np.array:
     return v
 
 def skew_symmetric(v: np.array) -> np.array:
-    return np.array([[0, -v[2], v[1]],
-                     [v[2], 0, -v[0]],
-                     [-v[1], v[0], 0]])
+    if np.shape(v) == (3,):
+        v = np.asmatrix(v).T
+    return np.array([[0, -v[2,0], v[1,0]],
+                     [v[2,0], 0, -v[0,0]],
+                     [-v[1,0], v[0,0], 0]])
 
 def col_vec(v: np.array) -> np.array:
     return np.asmatrix(v).T

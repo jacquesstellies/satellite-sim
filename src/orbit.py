@@ -312,7 +312,7 @@ class Disturbances():
     T : np.array = np.zeros(3)
     enable = False
     model = ""
-    models = ['realistic', 'Nadafi']
+    models = ['realistic', 'Nadafi', 'Zarourati']
     t_sample = 0.1
 
     def __init__(self, orbit, config):
@@ -392,7 +392,7 @@ class Disturbances():
     #     rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
     #     dcm = rotation_obj.as_matrix()
 
-    def calc_torque_model(self, satellite, dcm, t):
+    def calc_torque_realistic(self, satellite, dcm, t):
         T_aero = self.calc_aero_torque(satellite, dcm)
         # T_grav = self.calc_grav_torque(satellite, dcm)
         T_dist = T_aero #+ T_grav
@@ -411,8 +411,10 @@ class Disturbances():
         if self.enable:
             if self.model == "Nadafi":
                 self.T = self.calc_dist_torque_Nadafi(t)
+            elif self.model == "Zarourati":
+                self.T = self.calc_dist_torque_Zarourati(t, satellite.w)
             elif self.model == "realistic":
-                self.T = self.calc_torque_model(satellite, dcm, t)
+                self.T = self.calc_torque_realistic(satellite, dcm, t)
                 # self.T_dist = self.disturbances.calc_torque_realistic(t, self, dcm)
             else:
                 raise Exception("disturbance model not specified")
@@ -425,3 +427,11 @@ class Disturbances():
     
     def calc_dist_torque_Nadafi(self, t):
         return np.array([0.1 + 9*np.sin(0.5*t), 0.1 + 7.5*np.sin(0.8*t), 0])*7.5e-3
+    
+    def calc_dist_torque_Zarourati(self, t, w_sat):
+        n = 0.0011
+        return np.array(
+                    [-3 + 4*cos(n*t) - cos(n*t) + 2*w_sat[0]*sin(n*t),
+                    4 + 3*sin(n*t) - 2*cos(n*t) + w_sat[1]*cos(n*t),
+                    -3 + 4*sin(n*t) - 3*sin(n*t) - 2*w_sat[2]*cos(n*t)]
+                        )*7.5e-3

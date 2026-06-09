@@ -406,7 +406,8 @@ class Controller:
 
     def init_satellite(self, satellite):
         self.satellite = satellite
-        self.nadafi_controller.satellite = satellite
+        if self.nadafi_controller is not None:
+            self.nadafi_controller.satellite = satellite
 
     q_prev : np.quaternion = None
     def calc_pid_torque(self, q_error: np.quaternion, w : np.array, M_inertia, H_wheels, w_d):
@@ -549,31 +550,27 @@ class Controller:
             """
             Implementation of UATC based on Zarourati et al. (2024).
             """
-            # Nominal Inertia Matrix [cite: 216]
+            # Nominal Inertia Matrix
             # J0 = J_nom
             J0 = satellite.M_inertia 
 
-            # Control Gains [cite: 577, 600]
+            # Control Gains
             k_a = 1.0
             k_u = 0.5
             k_w = 100.0
-            k_d = 0.0
+            k_d = 5.0
             k_phi = 1.0
-            # Parameters for auxiliary variable xi [cite: 576]
+            # Parameters for auxiliary variable xi
             gamma0, gamma1, gamma2 = (0.5, 1.0, 0.001)
             
-            # Reduced representation indices for #RW2 failure (Actuated: 1, 3) [cite: 510, 582]
+            # Reduced representation indices for #RW2 failure (Actuated: 1, 3)
             actuated_idx = np.array([0, 2]) 
             unactuated_idx = 1
             
-            # Skew-symmetric helper matrix G1 [cite: 512]
+            # Skew-symmetric helper matrix G1
             G1 = np.array([[0, -1], [1, 0]])
 
-            # def compute_control(self, q_e, w_e, w_d, wd_dot, H, w_body, phi_hat, t):
-            """
-            Computes the underactuated control torque u_c^r[cite: 597].
-            """
-            # 1. Extract transformed error states [cite: 512, 513]
+            # 1. Extract transformed error states
             q_ev = np.array([q_err.x, q_err.y, q_err.z])
             e_u = q_ev[unactuated_idx]
             e_a = col_vec(np.array(q_ev[actuated_idx]))
@@ -606,25 +603,18 @@ class Controller:
             xi = gamma0 * np.exp(-gamma1 * t) + gamma2
             dxi = gamma0 * (-gamma1 * np.exp(-gamma1 * t))
             ddxi = gamma0 * gamma1**2 * np.exp(-gamma1 * t)
-
-            # ω̇_eu via finite difference with low-pass filter to suppress derivative spikes
-            # if self.we_u_zarourati_prev is None:
-            #     dwe_u_raw = 0.0
-            # else:
-            #     dwe_u_raw = float(we_u - self.we_u_zarourati_prev) / self.t_sample
-            # self.we_u_zarourati_prev = we_u
-            # self.dwe_u_filtered = 0.7 * self.dwe_u_filtered + 0.3 * dwe_u_raw
-            # dwe_u = self.dwe_u_filtered
-            # dwe_u = float(we_u - self.we_u_zarourati_prev) / self.t_sample
-            # J = satellite.M_inertia
-            J_inv = self.satellite.M_inertia_inv
-            dwe = - J_inv @ my_utils.skew_symmetric(w)@satellite.H + my_utils.skew_symmetric(we) @ A @ w_d - J_inv @ A @ dw_d + J_inv @ satellite.wheel_module.D @ we
-            dwe_u = dwe[unactuated_idx, 0]
-            # 2. Kinematic Controller terms [cite: 573, 574]
+            
+            # ω̇_eu via finite difference
+            dwe_u = float(we_u - self.we_u_zarourati_prev) / self.t_sample
+            self.we_u_zarourati_prev = we_u
+            # J_inv = self.satellite.M_inertia_inv
+            # dwe = - J_inv @ my_utils.skew_symmetric(w)@satellite.H + my_utils.skew_symmetric(we) @ A @ w_d - J_inv @ A @ dw_d + J_inv @ satellite.wheel_module.D @ we # how to calculate disturbance?
+            # dwe_u = dwe[unactuated_idx, 0]
+            
+            # 2. Kinematic Controller terms
             kappa1 = (1.0 / xi**2) * (k_u * e_u + e4 * we_u)
             kappa2 = (2.0 * dxi / (e4 * xi)) + k_a * e4 # Note: text has a typo in 26, using logic from 25
-            kappa1 = kappa1[0,0]
-            # kappa2 = kappa2[0,0]
+            kappa1 = kappa1[0,0] # convert 1x1 numpy matrix to scalar
             Gamma = 0.5 * (k_a * e4 * e_u + e4 * kappa1 + we_u)
             Gamma = Gamma[0,0]
 
@@ -632,7 +622,7 @@ class Controller:
             dkappa2 = 2 / (e4**2 * xi ** 2) * (e4 * xi * ddxi - de4 * xi * dxi - e4 * dxi**2) + k_a * de4
             dkappa1 = dkappa1[0,0]
 
-            # Assuming e_d follows the oscillator-like eq (24) [cite: 571]
+            # Assuming e_d follows the oscillator-like eq (24)
             # Simplified for instant computation as a vector with norm xi
             if self.init is True:
                 self.e_d_prev = col_vec(np.array([np.sqrt(gamma0 + gamma2), np.sqrt(gamma0 + gamma2)]))  # ||e_d(0)|| = xi satisfies Eq. (24)
@@ -640,9 +630,6 @@ class Controller:
             E = np.array([[0, 1], [-1, 0]])
             de_d = (dxi/xi)*self.e_d_prev + Gamma * E @ self.e_d_prev
 
-            # de_d_norm = 2 * (dxi/xi) * self.e_d_prev + Gamma * self.e_d_prev.T @ E @ self.e_d_prev
-            # print(f"Gamma * self.e_d_prev.T @ E @ self.e_d_prev = {Gamma * self.e_d_prev.T @ E @ self.e_d_prev}")
-            # print(f"de_d_norm: {de_d_norm}, Gamma: {Gamma}, kappa1: {kappa1}, kappa2: {kappa2}, dxi: {dxi}, xi: {xi}")
             assert(de_d.shape == (2,1))
             e_d = self.e_d_prev + de_d * self.t_sample
             assert(e_d.shape == (2,1))
@@ -650,28 +637,19 @@ class Controller:
             if np.abs(e_d_norm - xi) > 1e-6:
                 e_d = (e_d / e_d_norm) * xi
             self.e_d_prev = e_d
-            # print(f"e_d: {e_d.flatten()}")
             
             # Virtual control input uk 
             u_k = -k_a * e4 * e_a + kappa1 * (G1 @ e_d) + kappa2 * e_d
             assert(u_k.shape == (2,1))
             du_k = -k_a * de4 * e_a - k_a * e4 * de_a + (dkappa1 * G1 @ e_d + dkappa2 * e_d) + (kappa1 * G1 @ de_d + kappa2 * de_d)
-            # print("(dkappa1 * G1 @ e_d + dkappa2 * e_d): ", (dkappa1 * G1 @ e_d + dkappa2 * e_d))
-            # print("(kappa1 * G1 @ de_d + dkappa2 * de_d): ", (kappa1 * G1 @ de_d + dkappa2 * de_d))
-            # print("de4 * e_a: ", de4 * e_a)
-            # print("dkappa1: ", dkappa1)
-            # print("dkappa2: ", dkappa2)
-            # print("kappa1: ", kappa1)
-            # print("kappa2: ", kappa2)
             
             assert(du_k.shape == (2, 1))
             
-            # 3. Dynamic error eta [cite: 582]
+            # 3. Dynamic error eta
             eta = u_k - we_a
             
-            # 4. Reduced Static and Dynamic components [cite: 583]
-            # J^r (Reduced inertia matrix)
-            J_r = J0[np.ix_(actuated_idx, actuated_idx)]
+            # 4. Reduced Static and Dynamic components
+            J_r = J0[np.ix_(actuated_idx, actuated_idx)] # J^r (Reduced inertia matrix)
             Sw = np.array([[0, -w[2,0], w[1,0]], [w[2,0], 0, -w[0,0]], [-w[1,0], w[0,0], 0]])
             Sw_r = Sw[np.ix_(actuated_idx, actuated_idx)]
             assert(Sw_r.shape == (2,2))
@@ -687,24 +665,11 @@ class Controller:
             e_a_tilde = e_d - e_a
             assert(e_a_tilde.shape == (2,1))
             
-            # 6. Adaptive update law for phi_hat (Eq. 29)
+            # 5. Adaptive update law for phi_hat (Eq. 29)
             phi_hat_dot = (k_phi / k_d) * (np.cosh(self.phi_hat_prev)**2) * float(np.linalg.norm(eta))
             self.phi_hat_prev = self.phi_hat_prev + phi_hat_dot * self.t_sample
 
-            # 5. Final Control Law uc^r [cite: 598]
-            # print("e4: ", e4)
-            # print("dxi: ", dxi)
-            # print("1: ", (Swe_r @ H_r))
-            # print("2: ", (J_r @ Sw_r @ A_r @ w_d_r))
-            # print("3: ", (J_r @ A_r @ dw_d_r))
-            # print("du_k: ", du_k)
-            # print("4: ", (J_r @ du_k))
-            # print("5: ", (k_w * np.tanh(eta)))
-            # print("6: ", (0.5 * G1 @ e_a * e_u))
-            # print("7: ", (0.5 * e_a_tilde))
-            # print("8: ", (k_d * np.sign(eta) * np.tanh(self.phi_hat_prev)))
-            # print(C_r)
-
+            # 6. Final Control Law uc^r
             u_c_r = C_r.T @ (Swe_r @ H_r - J_r @ Sw_r @ A_r @ w_d_r + J_r @ A_r @ dw_d_r + J_r @ du_k + k_w * np.tanh(eta)\
                            + 0.5 * G1 @ e_a * e_u + 0.5 * e_a_tilde + k_d * np.sign(eta) * np.tanh(self.phi_hat_prev))
 
