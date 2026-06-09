@@ -15,12 +15,16 @@ class Logger:
     enable = True
     next_timestamp = 0.0
     initialized = False
+    verbose = False
+    config = None
 
     def init(self, config, results_data : dict, satellite, enable, logger_fields : list):
         self.initialized = True
         self.results_data = results_data
         self.satellite = satellite
         self.enable = enable
+        self.verbose = config['simulation']['verbose']
+        self.config = config
         
         self.results_data["time"] = []
         self.results_data["jd"] = []
@@ -29,6 +33,7 @@ class Logger:
             self.results_data["T_sat_" + axis] = []
             self.results_data["w_sat_" + axis] = []
             self.results_data['T_dist_' + axis] = []
+            self.results_data['H_total_' + axis] = []
         for axis in my_utils.q_axes:
             self.results_data["q_sat_" + axis] = []
 
@@ -71,7 +76,8 @@ class Logger:
                     self.results_data['T_magt_' + axis].append(self.satellite.magt_module.T[i])
                     self.results_data['s_sat_eci_' + axis].append(self.satellite.orbit.sBI_I[i])
                     self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.DIsBI_I[i])
-                    self.results_data['n_sun_' + axis].append(self.satellite.orbit.n_BS_B[i])
+                    self.results_data['n_sun_' + axis].append(self.satellite.orbit.nSB_I[i])
+                    self.results_data['H_total_' + axis].append((self.satellite.H_total)[i])
                 
                 q_ref = [self.satellite.q_ref.x, self.satellite.q_ref.y, self.satellite.q_ref.z, self.satellite.q_ref.w]
                 for i, axis in enumerate(my_utils.q_axes):
@@ -95,4 +101,8 @@ class Logger:
                 #     self.results_data[f'control_theta_{axis}'].append(self.satellite.controller.theta[i])
                 self.next_timestamp += self.satellite.controller.t_sample
     
-    
+    def log(self, message):
+        if self.config['simulation']['tuning']:
+            return            
+        if self.verbose:
+            print(f"{message}")

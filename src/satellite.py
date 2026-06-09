@@ -46,6 +46,7 @@ class Satellite(Body):
     w = np.zeros(3)
     dw = np.zeros(3)
     H = np.zeros(3)
+    H_total = np.zeros(3)
     dH = np.zeros(3)
 
     fd_w_max = 2*np.pi/180 # rad/s
@@ -96,6 +97,11 @@ class Satellite(Body):
         self.T_ctr_wheels = np.zeros(self.wheel_module.num_wheels)
         self.T_ctr_vec = np.zeros(3)
         
+        self.w = np.array(config['satellite']['w_init_dps']) * my_utils.DEG_TO_RAD
+        assert len(self.w) == 3, "w_init_dps must be a 3 element array"
+        self.H = self.M_inertia@self.w
+        self.H_total = self.H + self.wheel_module.H_vec
+
         self.E = np.eye(self.wheel_module.num_wheels)
         self.f_wheels = np.zeros(self.wheel_module.num_wheels)
 
@@ -199,7 +205,8 @@ class Satellite(Body):
     def update_mode(self):
         mode_prev = self.mode
         if self.init == True:
-            print("MODE STARTUP \t ", self.mode)
+            if self.config['simulation']['verbose']:
+                print("MODE STARTUP \t ", self.mode)
         if self.mode == "ref_pointing":
             return
         # if self.orbit.eclipse:
@@ -236,7 +243,6 @@ class Satellite(Body):
 
         if self.mode == "nominal_night":
             self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI))
-            self.q
             w_OI = np.cross(self.orbit.sBI_I, self.orbit.DIsBI_I) / np.linalg.norm(self.orbit.sBI_I)**2
             self.w_ref = w_OI
             # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
@@ -306,15 +312,14 @@ class Satellite(Body):
 
         M_inertia_effective_inv = self.M_inertia_inv
 
-        
-        self.H = self.M_inertia@(self.w) + self.wheel_module.H_vec
+        self.H = self.M_inertia@(self.w)
+        self.H_total = self.H + self.wheel_module.H_vec
         self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,self.H) + self.magt_module.T)
-        # dw_sat_result = (self.M_inertia_inv)@(self.wheel_module.dH_vec + T_dist - my_utils.cross_product_M31M31(elf.w,Hnet)) + T_magt
 
         #### Calculate the new satellite body state rates
-        inertial_v_q = np.quaternion(0, self.w[0], self.w[1], self.w[2]) # put the inertial velocity in q form
+        inertial_w_q = np.quaternion(0, self.w[0], self.w[1], self.w[2]) # put the inertial velocity in q form
 
-        dq = 0.5*self.q*inertial_v_q
+        dq = 0.5*self.q*inertial_w_q
         dq = [dq.x, dq.y, dq.z, dq.w]
         control_power = abs(self.wheel_module.dH_vec * self.w) ## @TODO fix this
         

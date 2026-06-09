@@ -83,7 +83,8 @@ use_inertia = true
 [magt]
 mag_moment_max = 1000 # Am2
 t_sample = 1.0
-enable = false
+enable = true
+mode = "momentum_dumping" # z-axis_simple, momentum_dumping, momentum_dump_w_z_axis_simple
 
 [faults]
 master_enable = false
@@ -123,6 +124,7 @@ use_ref_series = false
 ref_q_series = [[ 0.12707253, -0.17409001,  0.12707253,  0.96819307], [ 0.0, 0.0, 0.0, 1.0 ]]
 ref_t_series=[ 0, 30,]
 wheels_control_enable = true
+w_init_dps = [0, 0, 0,]
 mass = 12
 # M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
 # M_Inertia = [ [ 50.0, 1.2, 0.5,], [ 1.2, 50.0, 1.5,], [ 0.5, 1.5, 50.0,],]
@@ -146,13 +148,13 @@ accuracy_enable = true
 energy_enable = true
 log_enable = true
 append_date = false
-pdf_output_enable = false
+pdf_output_enable = true
 log_file_name_overide = "None"
 separate_plots_display = false
 show_plots = false
 
 [output.visualizer]
-enable = true
+enable = false
 file_path = "/opt/satellite-visualizer/dist/telemetry.json"
 t_sample = 10.0
 # file_path = "/home/jacques/repos/masters/satellite-sim/telemetry-viewer.json"
@@ -164,7 +166,7 @@ y = 1.5
 z = 0.7
 
 [FDIR]
-enable = false
+enable = true
 
 [FDIR.wheels]
 enable = false
@@ -172,5 +174,5 @@ inst_time_threshold = 10
 inst_count_threshold = 5
 
 [FDIR.satellite]
-enable = false
-w_max_dps = 10
+enable = true
+w_max_dps = 600

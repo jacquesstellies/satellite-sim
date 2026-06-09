@@ -50,7 +50,7 @@ class Orbit():
     enable = True
 
     def __init__(self, config):
-        if config['simulation']['tuning']:
+        if config['simulation']['tuning'] and config['satellite']['mode'] == "ref_pointing":
             self.enable = False
         altitude = config['orbit']['altitude_km']
         if 't_sample' in config['orbit']:
@@ -80,15 +80,10 @@ class Orbit():
         
         self.period = 2*np.pi*self.radius/np.sqrt(MU/self.radius)
 
-        # self.arg_perigee = np.pi/2
         self.arg_perigee = 0
 
-        # self.v = np.sqrt(G*m_earth/self.radius)
-        # self.v_norm = np.linalg.norm(self.v)
         if 'mean_anomaly_deg' in config['orbit']:
             self.mean_anomaly = config['orbit']['mean_anomaly_deg'] * np.pi / 180
-
-        # self.true_anomaly = 0
 
         self.sgp4_sat = Satrec()
 
@@ -118,11 +113,7 @@ class Orbit():
             2*np.pi/(self.period/60), # mean motion (rad/min)
             self.RAAN # rad
         )
-        with solar_system_ephemeris.set('de440'):
-            r_GS_G = get_body('sun', Time(self.jd, format='jd'), None, 'jpl').cartesian.xyz.to_value()
-            # r_GS_G = get_body('sun', Time("2026-01-01 00:00:00", format='iso', scale='utc'), None, 'jpl').cartesian.xyz.to_value()
-        self.n_BS_B = r_GS_G/np.linalg.norm(r_GS_G)
-        # self.s = 
+
 
     next_t_sample: float = 0.0
     # orbital parameters update
@@ -290,15 +281,7 @@ class Orbit():
 
     def calc_sun_vector_update(self):
         rSI_I = self.get_sun_position(self.jd + self.fr)
-        # nST_T = rSI_I/np.linalg.norm(rSI_I)
         return rSI_I 
-
-        # with solar_system_ephemeris.set('de440'):
-            # r_GS_G = get_body('sun', Time(self.jd + t/86400, format='jd'), 'itrs').cartesian.xyz.to_value()
-            # r_GS_G = get_body('sun', Time("2026-01-01 00:00:00", format='iso', scale='utc'), None, 'jpl').cartesian.xyz.to_value()
-        # return r_GS_G
-
-    r_GS_G = np.zeros(3)
 
     def check_sun_eclipse(self, r_sat: np.array, r_sun: np.array) -> bool:
         """Check if the satellite is in Earth's shadow.

@@ -183,7 +183,7 @@ class Simulation:
         else:
             dir_init = Rotation.from_quat(config['satellite']['q_init'])
 
-        w_sat_init = np.array([0,0,0])
+        w_sat_init = np.array(config['satellite']['w_init_dps']) * my_utils.DEG_TO_RAD
         controller = Controller(faults=self.fault_module.faults, wheel_module=wheel_module, results_data=results_data, w_sat_init=np.zeros(3), q_sat_init=my_utils.conv_Rotation_obj_to_numpy_q(dir_init),
                                     config=config)
         observer_module = ObserverModule(config, wheel_module)
@@ -193,6 +193,7 @@ class Simulation:
         # self.logger = Logger(config, results_data, self.satellite, logger_fields=None)
         self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, self.logger, orbit=orbit, config=config)
 
+        controller.init_satellite(self.satellite)
         #------------------------------------------------------------#
         ###################### Set Up Initial Conditions ########################
         # Satellite Initial Conditions
@@ -235,7 +236,7 @@ class Simulation:
         # Integrate satellite dynamics over time
         t_monotonic_end_unix = time.time()
 
-        print(f"Simulation took {t_monotonic_end_unix - t_monotonic_start_unix} seconds")
+        self.logger.log(f"Simulation took {t_monotonic_end_unix - t_monotonic_start_unix} seconds")
         return sol
     
     def simulate_monte_carlo(self):
@@ -277,7 +278,7 @@ class Simulation:
             
         for key, value in self.results_data.items():
             if len(value) != len(self.sim_time_series):
-                print(f"Warning: {key} has length {len(value)} but time has length {len(self.sim_time_series)}")
+                self.logger.log(f"Warning: {key} has length {len(value)} but time has length {len(self.sim_time_series)}")
                 # self.results_data[key] = interpolate_data(value, self.results_data['time'], self.sim_time_series)[:]
             # else:
                 # raise(Exception(f"Warning: {key} has length {len(value)} but time has length {len(self.results_data['time'])}"))
@@ -312,10 +313,10 @@ class Simulation:
         # [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = self.results_df.apply(lambda row: my_utils.get_quaternion_error_Nadafi(row, ), axis=1).T
         self.results_df['euler_axis_sat_error'] = self.results_df['q_sat_error_w'].apply(lambda w: 2*np.arccos(w))
         self.results_df['euler_axis_sat_error_deg'] = self.results_df['euler_axis_sat_error'] * 180 / np.pi
-        print(f"use_only_sol: {use_only_sol}")
+        self.logger.log(f"use_only_sol: {use_only_sol}")
         if use_only_sol == False:
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
-                print(f"calculating T_wheels_est_{i}")
+                self.logger.log(f"calculating T_wheels_est_{i}")
                 self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
                 # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
@@ -323,10 +324,7 @@ class Simulation:
 
         for i,axis in enumerate(my_utils.xyz_axes):
             if self.config['output']['energy_enable']:
-                self.calc_control_energy_output_results(self.results_data['control_energy_{}'.format(axis)])
-        
-        if self.config['output']['accuracy_enable']:
-            self.calc_accuracy_output_results()    
+                self.calc_control_energy_output_results(self.results_data['control_energy_{}'.format(axis)])  
     
     control_energy_log_output = ""
     def calc_control_energy_output_results(self, control_energy_arr):
@@ -358,10 +356,10 @@ class Simulation:
             final_euler  = Rotation.from_quat(q_final).as_euler('xyz', degrees=True)
             euler_error = Rotation.from_quat([q_error.x, q_error.y, q_error.z, q_error.w]).as_euler('xyz', degrees=True)
 
-            print(f"final euler: {final_euler} deg xyz")
-            print(f"euler error: {euler_error} deg xyz")
-            print(f"principal angle error: {prin_error*180/np.pi} deg")
-            print(f"steady state value: {self.steady_state} deg")
+            self.logger.log(f"final euler: {final_euler} deg xyz")
+            self.logger.log(f"euler error: {euler_error} deg xyz")
+            self.logger.log(f"principal angle error: {prin_error*180/np.pi} deg")
+            self.logger.log(f"steady state value: {self.steady_state} deg")
 
             if self.config['satellite']['use_ref_series'] is True:
                 return
@@ -372,8 +370,8 @@ class Simulation:
 
             
             if self.monte_carlo == False:
-                print(f"settling_time (s): {round(self.settling_time,3)}")
-                print(f"steady_state (s): {round(self.steady_state,3)}")
+                self.logger.log(f"settling_time (s): {round(self.settling_time,3)}")
+                self.logger.log(f"steady_state (s): {round(self.steady_state,3)}")
 
 
             # control_info_y = control.step_info(sysdata=self.results_df['e_sat_yaw'],SettlingTimeThreshold=0.002, T=self.results_data['time'])
@@ -382,7 +380,7 @@ class Simulation:
 
             # print(f"steady state value: {control_info_y['SteadyStateValue']} {control_info_p['SteadyStateValue']} {control_info_r['SteadyStateValue']} deg zyx")
         except Exception as e:
-            print(f"Error calculating accuracy: {e}")
+            self.logger.log(f"Error calculating accuracy: {e}")
 
     def log_output_to_file(self, LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en):
         if LOG_FILE_NAME != None and test_mode_en is False:
@@ -558,27 +556,20 @@ def Nadafi_BS_controller_param_optimize(gains, particle_num, config):
     # Calculate Cost
     results_data_local = {}
     config['simulation']['duration'] = config['tuning']['duration']
-    sim_obj = Simulation(config, results_data = results_data_local, logging_en=False)
+    sim_obj = Simulation(config, results_data = results_data_local, logging_en=True)
     
-    [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
-        sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
-        sim_obj.satellite.controller.nafadi_controller.lambda_1,
-        sim_obj.satellite.controller.nafadi_controller.lambda_2,
-        sim_obj.satellite.controller.nafadi_controller.lambda_3] = gains
+    [sim_obj.satellite.controller.nadafi_controller.Gamma_z11,
+        sim_obj.satellite.controller.nadafi_controller.Gamma_z22,
+        sim_obj.satellite.controller.nadafi_controller.lambda_1,
+        sim_obj.satellite.controller.nadafi_controller.lambda_2,
+        sim_obj.satellite.controller.nadafi_controller.lambda_3] = gains
     sol = sim_obj.simulate_monte_carlo()
     if sol == -1:
         cost = 1e9
     else:
-        SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
-        #control_energy = sum(map(lambda i: np.sum(np.abs(sol.y[i+7])), range(3))) # Total control energy
-    
-        # energy_cost = 0.001*control_energy
-        # steady_state_cost = 2*np.arccos(sol.y[6][-1])*1e3
-        # print(f"SSE Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
-        # print(f"Energy Cost: {energy_cost}")
-        # print(f"Steady State Cost: {steady_state_cost}")
-        # cost = SSE + 0.001*control_energy + 2*np.arccos(sol.y[6][-1])*1e4 #+ 1e6*(sol.y[0][-1]**2 + sol.y[1][-1]**2 + sol.y[2][-1]**2)  # Weighted cost function combining accuracy and control energy
-        cost = SSE + 2*np.arccos(sol.y[6][-1])*1e5 #+ 1e6*(sol.y[0][-1]**2 + sol.y[1][-1]**2 + sol.y[2][-1]**2)  # Weighted cost function combining accuracy and control energy
+        sim_obj.collect_results(sol, use_only_sol=True)
+        SSE = sum(sim_obj.results_df['euler_axis_sat_error']**2) # Sum of squared principal angle errors
+        cost = SSE + sim_obj.results_df['euler_axis_sat_error'].iloc[-1]*1e5
     del sim_obj
     del results_data_local
     return cost
@@ -587,24 +578,26 @@ def Nadafi_BS_controller_param_optimize(gains, particle_num, config):
 def Nadafi_BS_FNDO_controller_param_optimize(gains, particle_num, config):
     # Calculate Cost
     results_data_local = {}
-    sim_obj = Simulation(config, results_data = results_data_local, logging_en=False)
+    config['simulation']['duration'] = config['tuning']['duration']
+    sim_obj = Simulation(config, results_data = results_data_local, logging_en=True)
     
-    [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
-        sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
-        sim_obj.satellite.controller.nafadi_controller.lambda_1,
-        sim_obj.satellite.controller.nafadi_controller.lambda_2,
-        sim_obj.satellite.controller.nafadi_controller.lambda_3,
-        sim_obj.satellite.controller.nafadi_controller.L11,
-        sim_obj.satellite.controller.nafadi_controller.L22,
-        sim_obj.satellite.controller.nafadi_controller.kappa_0,
-        sim_obj.satellite.controller.nafadi_controller.kappa_1] = gains
+    [sim_obj.satellite.controller.nadafi_controller.Gamma_z11,
+        sim_obj.satellite.controller.nadafi_controller.Gamma_z22,
+        sim_obj.satellite.controller.nadafi_controller.lambda_1,
+        sim_obj.satellite.controller.nadafi_controller.lambda_2,
+        sim_obj.satellite.controller.nadafi_controller.lambda_3,
+        sim_obj.satellite.controller.nadafi_controller.L11,
+        sim_obj.satellite.controller.nadafi_controller.L22,
+        sim_obj.satellite.controller.nadafi_controller.kappa_0,
+        sim_obj.satellite.controller.nadafi_controller.kappa_1] = gains
     sol = sim_obj.simulate_monte_carlo()
     cost = 0
     if sol == -1:
         cost = 1e9
     else:
-        SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
-        cost = SSE
+        sim_obj.collect_results(sol, use_only_sol=True)
+        SSE = sum(sim_obj.results_df['euler_axis_sat_error']**2) # Sum of squared principal angle errors
+        cost = SSE + sim_obj.results_df['euler_axis_sat_error'].iloc[-1]*1e5
     # print(f"Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
     del sim_obj
     del results_data_local
@@ -613,28 +606,30 @@ def Nadafi_BS_FNDO_controller_param_optimize(gains, particle_num, config):
 def Nadafi_BS_MFNDO_controller_param_optimize(gains, particle_num, config):
     # Calculate Cost
     results_data_local = {}
-    sim_obj = Simulation(config, results_data = results_data_local, logging_en=False)
+    config['simulation']['duration'] = config['tuning']['duration']
+    sim_obj = Simulation(config, results_data = results_data_local, logging_en=True)
     
-    [sim_obj.satellite.controller.nafadi_controller.Gamma_z11,
-        sim_obj.satellite.controller.nafadi_controller.Gamma_z22,
-        sim_obj.satellite.controller.nafadi_controller.lambda_1,
-        sim_obj.satellite.controller.nafadi_controller.lambda_2,
-        sim_obj.satellite.controller.nafadi_controller.lambda_3,
-        sim_obj.satellite.controller.nafadi_controller.L11,
-        sim_obj.satellite.controller.nafadi_controller.L22,
-        sim_obj.satellite.controller.nafadi_controller.kappa_0,
-        sim_obj.satellite.controller.nafadi_controller.kappa_1,
-        sim_obj.satellite.controller.nafadi_controller.Gamma_mu11,
-        sim_obj.satellite.controller.nafadi_controller.Gamma_mu22,
-        sim_obj.satellite.controller.nafadi_controller.alpha_1,
-        sim_obj.satellite.controller.nafadi_controller.alpha_2] = gains
+    [sim_obj.satellite.controller.nadafi_controller.Gamma_z11,
+        sim_obj.satellite.controller.nadafi_controller.Gamma_z22,
+        sim_obj.satellite.controller.nadafi_controller.lambda_1,
+        sim_obj.satellite.controller.nadafi_controller.lambda_2,
+        sim_obj.satellite.controller.nadafi_controller.lambda_3,
+        sim_obj.satellite.controller.nadafi_controller.L11,
+        sim_obj.satellite.controller.nadafi_controller.L22,
+        sim_obj.satellite.controller.nadafi_controller.kappa_0,
+        sim_obj.satellite.controller.nadafi_controller.kappa_1,
+        sim_obj.satellite.controller.nadafi_controller.Gamma_mu11,
+        sim_obj.satellite.controller.nadafi_controller.Gamma_mu22,
+        sim_obj.satellite.controller.nadafi_controller.alpha_1,
+        sim_obj.satellite.controller.nadafi_controller.alpha_2] = gains
     sol = sim_obj.simulate_monte_carlo()
     cost = 0
     if sol == -1:
         cost = 1e9
     else:
-        SSE = sum(map(lambda w: (2*np.arccos(np.clip(w, -1, 1)))**2, sol.y[6])) # Sum of squared principal angle errors
-        cost = SSE
+        sim_obj.collect_results(sol, use_only_sol=True)
+        SSE = sum(sim_obj.results_df['euler_axis_sat_error']**2) # Sum of squared principal angle errors
+        cost = SSE + sim_obj.results_df['euler_axis_sat_error'].iloc[-1]*1e5
     # print(f"Cost: {SSE} | Gains: {gains}, Particle: {particle_num}")
     del sim_obj
     del results_data_local
@@ -724,93 +719,73 @@ def main():
             print(f"Final Gains: {gains}")
             print(f"Final Cost: {cost}")
 
-            # if config['controller']['sub_type'] == "Nadafi_BS":
-            #     config['Nadafi']['Gamma_z11'] = gains[0]
-            #     config['Nadafi']['Gamma_z22'] = gains[1]
-            #     config['Nadafi']['L11'] = gains[2]
-            #     config['Nadafi']['L22'] = gains[3]
-            #     config['Nadafi']['lambda_1'] = gains[4]
-            #     config['Nadafi']['lambda_2'] = gains[5] 
-            #     config['Nadafi']['lambda_3'] = gains[6]
-            # elif config['controller']['sub_type'] == "Nadafi_FNDO":
-            #     config['Nadafi']['Gamma_z11'] = gains[0]
-            #     config['Nadafi']['Gamma_z22'] = gains[1]
-            #     config['Nadafi']['L11'] = gains[2]
-            #     config['Nadafi']['L22'] = gains[3]
-            #     config['Nadafi']['kappa_0'] = gains[4]
-            #     config['Nadafi']['kappa_1'] = gains[5] 
-            #     config['Nadafi']['lambda_1'] = gains[6]
-            #     config['Nadafi']['lambda_2'] = gains[7]
-            #     config['Nadafi']['lambda_3'] = gains[8]
-            # else:
-            #     raise Exception(f"Controller sub type {config['controller']['sub_type']} not recognized for tuning")
 
             config['simulation']['verbose'] = True
             simulation = Simulation(config, results_data)
 
             if config['controller']['sub_type'] == "Nadafi_BS":
-                simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
-                simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[2]
-                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[3] 
-                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[4]
+                simulation.satellite.controller.nadafi_controller.Gamma_z11 = gains[0]
+                simulation.satellite.controller.nadafi_controller.Gamma_z22 = gains[1]
+                simulation.satellite.controller.nadafi_controller.lambda_1 = gains[2]
+                simulation.satellite.controller.nadafi_controller.lambda_2 = gains[3] 
+                simulation.satellite.controller.nadafi_controller.lambda_3 = gains[4]
             elif config['controller']['sub_type'] == "Nadafi_FNDO":
-                simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
-                simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[2]
-                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[3]
-                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[4]
-                simulation.satellite.controller.nafadi_controller.L11 = gains[5]
-                simulation.satellite.controller.nafadi_controller.L22 = gains[6]
-                simulation.satellite.controller.nafadi_controller.kappa_0 = gains[7]
-                simulation.satellite.controller.nafadi_controller.kappa_1 = gains[8] 
+                simulation.satellite.controller.nadafi_controller.Gamma_z11 = gains[0]
+                simulation.satellite.controller.nadafi_controller.Gamma_z22 = gains[1]
+                simulation.satellite.controller.nadafi_controller.lambda_1 = gains[2]
+                simulation.satellite.controller.nadafi_controller.lambda_2 = gains[3]
+                simulation.satellite.controller.nadafi_controller.lambda_3 = gains[4]
+                simulation.satellite.controller.nadafi_controller.L11 = gains[5]
+                simulation.satellite.controller.nadafi_controller.L22 = gains[6]
+                simulation.satellite.controller.nadafi_controller.kappa_0 = gains[7]
+                simulation.satellite.controller.nadafi_controller.kappa_1 = gains[8] 
             elif config['controller']['sub_type'] == "Nadafi_MFNDO":
-                simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
-                simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                simulation.satellite.controller.nafadi_controller.lambda_1 = gains[2]
-                simulation.satellite.controller.nafadi_controller.lambda_2 = gains[3]
-                simulation.satellite.controller.nafadi_controller.lambda_3 = gains[4]
-                simulation.satellite.controller.nafadi_controller.L11 = gains[5]
-                simulation.satellite.controller.nafadi_controller.L22 = gains[6]
-                simulation.satellite.controller.nafadi_controller.kappa_0 = gains[7]
-                simulation.satellite.controller.nafadi_controller.kappa_1 = gains[8] 
-                simulation.satellite.controller.nafadi_controller.Gamma_mu11 = gains[9]
-                simulation.satellite.controller.nafadi_controller.Gamma_mu22 = gains[10]
-                simulation.satellite.controller.nafadi_controller.alpha_1 = gains[11]
-                simulation.satellite.controller.nafadi_controller.alpha_2 = gains[12]
+                simulation.satellite.controller.nadafi_controller.Gamma_z11 = gains[0]
+                simulation.satellite.controller.nadafi_controller.Gamma_z22 = gains[1]
+                simulation.satellite.controller.nadafi_controller.lambda_1 = gains[2]
+                simulation.satellite.controller.nadafi_controller.lambda_2 = gains[3]
+                simulation.satellite.controller.nadafi_controller.lambda_3 = gains[4]
+                simulation.satellite.controller.nadafi_controller.L11 = gains[5]
+                simulation.satellite.controller.nadafi_controller.L22 = gains[6]
+                simulation.satellite.controller.nadafi_controller.kappa_0 = gains[7]
+                simulation.satellite.controller.nadafi_controller.kappa_1 = gains[8] 
+                simulation.satellite.controller.nadafi_controller.Gamma_mu11 = gains[9]
+                simulation.satellite.controller.nadafi_controller.Gamma_mu22 = gains[10]
+                simulation.satellite.controller.nadafi_controller.alpha_1 = gains[11]
+                simulation.satellite.controller.nadafi_controller.alpha_2 = gains[12]
             else:
                 raise Exception(f"Controller sub type {config['controller']['sub_type']} not recognized for tuning")
             simulation.logging_en = True
             # gains = np.array(gains)
-            print(f"Gamma_z11 = {simulation.satellite.controller.nafadi_controller.Gamma_z11}")
-            print(f"Gamma_z22 = {simulation.satellite.controller.nafadi_controller.Gamma_z22}")
-            print(f"lambda_1 = {simulation.satellite.controller.nafadi_controller.lambda_1}")
-            print(f"lambda_2 = {simulation.satellite.controller.nafadi_controller.lambda_2}")
-            print(f"lambda_3 = {simulation.satellite.controller.nafadi_controller.lambda_3}")
-            print(f"L11 = {simulation.satellite.controller.nafadi_controller.L11}")
-            print(f"L22 = {simulation.satellite.controller.nafadi_controller.L22}")
-            print(f"kappa_0 = {simulation.satellite.controller.nafadi_controller.kappa_0}")
-            print(f"kappa_1 = {simulation.satellite.controller.nafadi_controller.kappa_1}")
-            print(f"Gamma_mu11 = {simulation.satellite.controller.nafadi_controller.Gamma_mu11}\n")
-            print(f"Gamma_mu22 = {simulation.satellite.controller.nafadi_controller.Gamma_mu22}\n")
-            print(f"alpha_1 = {simulation.satellite.controller.nafadi_controller.alpha_1}\n")
-            print(f"alpha_2 = {simulation.satellite.controller.nafadi_controller.alpha_2}\n")
+            print(f"Gamma_z11 = {simulation.satellite.controller.nadafi_controller.Gamma_z11}")
+            print(f"Gamma_z22 = {simulation.satellite.controller.nadafi_controller.Gamma_z22}")
+            print(f"lambda_1 = {simulation.satellite.controller.nadafi_controller.lambda_1}")
+            print(f"lambda_2 = {simulation.satellite.controller.nadafi_controller.lambda_2}")
+            print(f"lambda_3 = {simulation.satellite.controller.nadafi_controller.lambda_3}")
+            print(f"L11 = {simulation.satellite.controller.nadafi_controller.L11}")
+            print(f"L22 = {simulation.satellite.controller.nadafi_controller.L22}")
+            print(f"kappa_0 = {simulation.satellite.controller.nadafi_controller.kappa_0}")
+            print(f"kappa_1 = {simulation.satellite.controller.nadafi_controller.kappa_1}")
+            print(f"Gamma_mu11 = {simulation.satellite.controller.nadafi_controller.Gamma_mu11}\n")
+            print(f"Gamma_mu22 = {simulation.satellite.controller.nadafi_controller.Gamma_mu22}\n")
+            print(f"alpha_1 = {simulation.satellite.controller.nadafi_controller.alpha_1}\n")
+            print(f"alpha_2 = {simulation.satellite.controller.nadafi_controller.alpha_2}\n")
 
             with open(fr'{LOG_FOLDER_PATH}/{LOG_FILE_NAME}_tuning_log' + ".txt", 'w+') as file:
                 file.write(f"Final Gains:\n")
-                file.write(f"Gamma_z11 = {simulation.satellite.controller.nafadi_controller.Gamma_z11}\n")
-                file.write(f"Gamma_z22 = {simulation.satellite.controller.nafadi_controller.Gamma_z22}\n")
-                file.write(f"lambda_1 = {simulation.satellite.controller.nafadi_controller.lambda_1}\n")
-                file.write(f"lambda_2 = {simulation.satellite.controller.nafadi_controller.lambda_2}\n")
-                file.write(f"lambda_3 = {simulation.satellite.controller.nafadi_controller.lambda_3}\n")
-                file.write(f"L11 = {simulation.satellite.controller.nafadi_controller.L11}\n")
-                file.write(f"L22 = {simulation.satellite.controller.nafadi_controller.L22}\n")
-                file.write(f"kappa_0 = {simulation.satellite.controller.nafadi_controller.kappa_0}\n")
-                file.write(f"kappa_1 = {simulation.satellite.controller.nafadi_controller.kappa_1}\n")
-                file.write(f"Gamma_mu11 = {simulation.satellite.controller.nafadi_controller.Gamma_mu11}\n")
-                file.write(f"Gamma_mu22 = {simulation.satellite.controller.nafadi_controller.Gamma_mu22}\n")
-                file.write(f"alpha_1 = {simulation.satellite.controller.nafadi_controller.alpha_1}\n")
-                file.write(f"alpha_2 = {simulation.satellite.controller.nafadi_controller.alpha_2}\n")
+                file.write(f"Gamma_z11 = {simulation.satellite.controller.nadafi_controller.Gamma_z11}\n")
+                file.write(f"Gamma_z22 = {simulation.satellite.controller.nadafi_controller.Gamma_z22}\n")
+                file.write(f"lambda_1 = {simulation.satellite.controller.nadafi_controller.lambda_1}\n")
+                file.write(f"lambda_2 = {simulation.satellite.controller.nadafi_controller.lambda_2}\n")
+                file.write(f"lambda_3 = {simulation.satellite.controller.nadafi_controller.lambda_3}\n")
+                file.write(f"L11 = {simulation.satellite.controller.nadafi_controller.L11}\n")
+                file.write(f"L22 = {simulation.satellite.controller.nadafi_controller.L22}\n")
+                file.write(f"kappa_0 = {simulation.satellite.controller.nadafi_controller.kappa_0}\n")
+                file.write(f"kappa_1 = {simulation.satellite.controller.nadafi_controller.kappa_1}\n")
+                file.write(f"Gamma_mu11 = {simulation.satellite.controller.nadafi_controller.Gamma_mu11}\n")
+                file.write(f"Gamma_mu22 = {simulation.satellite.controller.nadafi_controller.Gamma_mu22}\n")
+                file.write(f"alpha_1 = {simulation.satellite.controller.nadafi_controller.alpha_1}\n")
+                file.write(f"alpha_2 = {simulation.satellite.controller.nadafi_controller.alpha_2}\n")
                 file.write(f"Final Cost: {cost}\n")
 
             print(f"Running simulation with tuned gains: {gains}")
@@ -829,60 +804,6 @@ def main():
             #-------------------------------------------------------------#
             ###################### Simulate System ########################
             if sim_iter == 1:
-                
-                # config['simulation']['verbose'] = True
-                # simulation = Simulation(config, results_data)
-                # gains = [-0.78051476,  1.09073806,  4.34987746, -0.68105975, 10.16490197]
-                # if config['controller']['sub_type'] == "Nadafi_BS":
-                #     simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
-                #     simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                #     simulation.satellite.controller.nafadi_controller.lambda_1 = gains[2]
-                #     simulation.satellite.controller.nafadi_controller.lambda_2 = gains[3] 
-                #     simulation.satellite.controller.nafadi_controller.lambda_3 = gains[4]
-                # elif config['controller']['sub_type'] == "Nadafi_FNDO":
-                #     simulation.satellite.controller.nafadi_controller.Gamma_z11 = gains[0]
-                #     simulation.satellite.controller.nafadi_controller.Gamma_z22 = gains[1]
-                #     simulation.satellite.controller.nafadi_controller.L11 = gains[2]
-                #     simulation.satellite.controller.nafadi_controller.L22 = gains[3]
-                #     simulation.satellite.controller.nafadi_controller.kappa_0 = gains[4]
-                #     simulation.satellite.controller.nafadi_controller.kappa_1 = gains[5] 
-                #     simulation.satellite.controller.nafadi_controller.lambda_1 = gains[6]
-                #     simulation.satellite.controller.nafadi_controller.lambda_2 = gains[7]
-                #     simulation.satellite.controller.nafadi_controller.lambda_3 = gains[8]
-                # else:
-                #     raise Exception(f"Controller sub type {config['controller']['sub_type']} not recognized for tuning")
-                # simulation.logging_en = True
-                # # gains = np.array(gains)
-                # print(f"Gamma_z11: {simulation.satellite.controller.nafadi_controller.Gamma_z11}")
-                # print(f"Gamma_z22: {simulation.satellite.controller.nafadi_controller.Gamma_z22}")
-                # print(f"lambda_1: {simulation.satellite.controller.nafadi_controller.lambda_1}")
-                # print(f"lambda_2: {simulation.satellite.controller.nafadi_controller.lambda_2}")
-                # print(f"lambda_3: {simulation.satellite.controller.nafadi_controller.lambda_3}")
-
-                # with open(fr'{LOG_FOLDER_PATH}/{LOG_FILE_NAME}_tuning_log' + ".txt", 'w+') as file:
-                #     file.write(f"Final Gains:\n")
-                #     file.write(f"Gamma_z11 = {simulation.satellite.controller.nafadi_controller.Gamma_z11}\n")
-                #     file.write(f"Gamma_z22 = {simulation.satellite.controller.nafadi_controller.Gamma_z22}\n")
-                #     file.write(f"lambda_1 = {simulation.satellite.controller.nafadi_controller.lambda_1}\n")
-                #     file.write(f"lambda_2 = {simulation.satellite.controller.nafadi_controller.lambda_2}\n")
-                #     file.write(f"lambda_3 = {simulation.satellite.controller.nafadi_controller.lambda_3}\n")
-                #     file.write(f"L11 = {simulation.satellite.controller.nafadi_controller.L11}\n")
-                #     file.write(f"L22 = {simulation.satellite.controller.nafadi_controller.L22}\n")
-                #     file.write(f"kappa_0 = {simulation.satellite.controller.nafadi_controller.kappa_0}\n")
-                #     file.write(f"kappa_1 = {simulation.satellite.controller.nafadi_controller.kappa_1}\n")
-                #     # file.write(f"gamma_mu: {simulation.satellite.controller.nafadi_controller.gamma_mu}\n")
-                #     # file.write(f"Final Cost: {cost}\n")
-
-                # simulation.sim_time = 300
-                # sol = simulation.simulate()
-                # print("Simulation Complete")
-
-                # simulation.collect_results(sol)
-                # rows = [('q_sat',my_utils.q_axes, 'Quaternion'), ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)' )]
-                # print("Creating plots of tuned parameters simulation...")
-                # simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
-
-                # del(simulation)
 
                 ###############################################
                 simulation = Simulation(config, results_data)
@@ -897,6 +818,9 @@ def main():
                 if (test_mode_en):
                     exit(0)
                 simulation.collect_results(sol)
+                        
+                if config['output']['accuracy_enable']:
+                    simulation.calc_accuracy_output_results()  
 
                 simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 
@@ -937,10 +861,12 @@ def main():
                 rows_2.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
                 rows_2.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
                 # rows_2.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
+                rows_2.append(('H_total', my_utils.xyz_axes, 'Total Angular Momentum (Nm*s)'))
 
                 rows_2.append(('s_sat_eci', my_utils.xyz_axes, 'Satellite Position ECI (km)'))
                 rows_2.append(('v_sat_eci', my_utils.xyz_axes, 'Satellite Velocity ECI (km/s)'))
                 rows_2.append(('n_sun', my_utils.xyz_axes, 'Sun Vector (unitless)'))
+                
                 
                 simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
                 simulation.create_plots_combined(rows, cols, simulation.results_df, config, LOG_FILE_NAME)
@@ -995,6 +921,9 @@ def main():
                         simulation.satellite.dir_init = Rotation.from_quat(q_init.as_float_array(), scalar_first=True)
                         sol = simulation.simulate()
                         simulation.collect_results(sol)
+                                
+                        if config['output']['accuracy_enable']:
+                            simulation.calc_accuracy_output_results()  
                         results['accuracy'].append(simulation.accuracy)
                         results['settling_time'].append(simulation.settling_time)
                         # results['euler_axis_final'].append(results_data['euler_axis'][-1])

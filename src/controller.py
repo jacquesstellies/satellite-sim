@@ -403,7 +403,11 @@ class Controller:
         self.sub_type = config['controller']['sub_type']
         self.e_d_prev = col_vec(np.zeros(2))
         if self.sub_type == "Nadafi_BS" or self.sub_type == "Nadafi_FNDO" or self.sub_type == "Nadafi_MFNDO":
-            self.nafadi_controller = NadafiController(config)
+            self.nadafi_controller = NadafiController(config)
+
+    def init_satellite(self, satellite):
+        self.satellite = satellite
+        self.nadafi_controller.satellite = satellite
 
     q_prev : np.quaternion = None
     def calc_pid_torque(self, q_error: np.quaternion, w : np.array, M_inertia, H_wheels):
