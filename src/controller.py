@@ -193,7 +193,7 @@ class NadafiController:
         self.chi_1 = self.chi_1 + dchi_1*self.t_sample
 
         u_r = - self.chi_1 - F + dphi@Aq@(Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
-        h_w = -1*J_0_r @ u_r #+ np  .skew_symmetric(w_r) @ J_0_r @ w_r
+        h_w = -1*J_0_r @ u_r
         
         return np.array([h_w[0,0], h_w[1,0], 0])
     
@@ -682,12 +682,11 @@ class Controller:
                 raise(Exception("invalid shape of u"))
                 
         elif self.config["controller"]["sub_type"] == "Nadafi_FNDO":
-        #    q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-           q_err = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
+           q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
            u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_ref)
 
         elif self.config["controller"]["sub_type"] == "Nadafi_BS":
-            q_err = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
+            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
             u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_ref)
 
         elif self.sub_type == "Nadafi_MFNDO":

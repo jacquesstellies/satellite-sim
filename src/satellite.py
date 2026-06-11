@@ -313,7 +313,7 @@ class Satellite(Body):
 
         self.H = self.M_inertia@(self.w)
         self.H_total = self.H + self.wheel_module.H_vec
-        self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,self.H) + self.magt_module.T)
+        self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,self.H_total) + self.magt_module.T)
 
         #### Calculate the new satellite body state rates
         inertial_w_q = np.quaternion(0, self.w[0], self.w[1], self.w[2]) # put the inertial velocity in q form
