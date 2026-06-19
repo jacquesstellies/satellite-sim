@@ -363,8 +363,8 @@ class ZarouratiController:
             if self.init is True:
                 self.e_d_prev = col_vec(np.array([np.sqrt(gamma0 + gamma2), np.sqrt(gamma0 + gamma2)]))  # ||e_d(0)|| = xi satisfies Eq. (24)
                 self.init = False
-            E = np.array([[0, 1], [-1, 0]])
-            de_d = (dxi/xi)*self.e_d_prev + Gamma * E @ self.e_d_prev
+            # E = np.array([[0, 1], [-1, 0]])
+            de_d = (dxi/xi)*self.e_d_prev + Gamma * G1 @ self.e_d_prev
 
             assert(de_d.shape == (2,1))
             e_d = self.e_d_prev + de_d * self.t_sample
