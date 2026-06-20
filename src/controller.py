@@ -276,29 +276,57 @@ class ZarouratiController:
     init = True
     we_u = 0.0
     phi_hat = 0.0
-    
+    t0 = None              # time origin: set to t when UATC first activates
+    dwe_u_filtered = 0.0   # low-pass filtered finite-difference of we_u
+
     def __init__(self, config):
         self.config = config
         self.h = 0.1
         self.t_sample = config['controller']['t_sample']
-    
-    
-    def calc_output(self, q_err, w, t):
-        
+
+        # Tunable parameters (exposed via the optional [Zarourati] config section).
+        # Defaults are the paper's Table 2 values; note these collapse xi very fast
+        # (gamma1=1 -> xi reaches its floor gamma2 in ~3 s), which makes kappa1 = (1/xi^2)*(...)
+        # blow up before the unactuated axis converges. Slower decay / higher floor is stable.
+        z = config.get('Zarourati', {})
+        self.k_a = z.get('k_a', 1.0)
+        self.k_u = z.get('k_u', 0.5)
+        self.k_w = z.get('k_w', 100.0)
+        self.k_d = z.get('k_d', 5.0)
+        self.k_phi = z.get('k_phi', 1.0)
+        self.gamma0 = z.get('gamma0', 0.5)
+        self.gamma1 = z.get('gamma1', 1.0)
+        self.gamma2 = z.get('gamma2', 0.001)
+        # Boundary-layer width replacing the discontinuous sign(eta) (avoids sample-rate chatter).
+        self.eta_bl = z.get('eta_boundary_layer', 0.05)
+        # Low-pass coefficient for the noisy d(we_u)/dt finite difference (0 = no filtering).
+        self.dwe_u_filter_coef = z.get('dwe_u_filter_coef', 0.8)
+        # Singularity guard for the 1/(e4*xi) and 1/e4^2 terms in kappa2 when e4 -> 0.
+        self.e4_eps = z.get('e4_eps', 1.0e-2)
+        # Clamp on the (unbounded) 1/xi^2 kinematic gains kappa1/kappa2 to keep the discrete
+        # loop from diverging via the kappa1 -> Gamma -> e_d feedback path.
+        self.kappa_max = z.get('kappa_max', 5.0)
+        # Control-torque clip; the paper's actuator limit u_m = 0.01 N.m, not the wheel max_torque.
+        self.u_max = z.get('u_max', self.config['wheels']['max_torque'])
+
+        if self.t0 is None:
+            self.t0 = 0
+    def calc_output(self, q_err, w, u_wheels_prev, t):
+
             """
             Implementation of UATC based on Zarourati et al. (2024).
             """
             J0 = self.satellite.M_inertia
 
             # Control Gains
-            k_a = 1.0
-            k_u = 0.5
-            k_w = 100.0
-            k_d = 5.0
-            k_phi = 1.0
+            k_a = self.k_a
+            k_u = self.k_u
+            k_w = self.k_w
+            k_d = self.k_d
+            k_phi = self.k_phi
             # Parameters for auxiliary variable xi
-            gamma0, gamma1, gamma2 = (0.5, 1.0, 0.001)
-            
+            gamma0, gamma1, gamma2 = (self.gamma0, self.gamma1, self.gamma2)
+
             # Reduced representation indices for #RW2 failure (Actuated: 1, 3)
             actuated_idx = np.array([0, 2]) 
             unactuated_idx = 1
