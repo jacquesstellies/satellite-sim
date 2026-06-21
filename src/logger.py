@@ -59,7 +59,34 @@ class Logger:
             self.results_data[f's_sat_eci_{i}'] = []
             self.results_data[f'v_sat_eci_{i}'] = []
             self.results_data[f'n_sun_{i}'] = []
-
+            self.results_data[f'w_sat_ref_{i}'] = []
+        
+        if self.config['controller']['type'] == 'backstepping':
+            if self.config['controller']['sub_type'].startswith('Nadafi'):
+                for axis in my_utils.xyz_axes:
+                    self.results_data[f'Z_{axis}'] = []
+                    self.results_data[f'F_{axis}'] = []
+                self.results_data['Z_norm'] = []
+            # if self.config['controller']['sub_type'].endswith('FNDO'):
+                for axis in my_utils.xyz_axes:
+                    self.results_data[f'chi_0_{axis}'] = []
+                    self.results_data[f'chi_1_{axis}'] = []
+                    self.results_data[f'v_0_{axis}'] = []
+                # if self.config['controller']['sub_type'] == 'Nadafi_MFNDO':
+                for axis in my_utils.xyz_axes:
+                    self.results_data[f'mu_{axis}'] = []
+            if self.config['controller']['sub_type'] == 'Zarourati':
+                self.results_data['xi'] = []
+                for axis in my_utils.xyz_axes:
+                    self.results_data[f'kappa1_{axis}'] = []
+                    self.results_data[f'kappa2_{axis}'] = []
+                    self.results_data[f'eta_{axis}'] = []
+                    self.results_data[f'eta_norm'] = []
+                    self.results_data[f'dwe_u'] = []
+                    self.results_data[f'we_u'] = []
+                    self.results_data[f'']
+                
+                        
         self.next_timestamp = self.satellite.controller.t_sample
 
     def log_data(self, t):
@@ -78,6 +105,7 @@ class Logger:
                     self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.DIsBI_I[i])
                     self.results_data['n_sun_' + axis].append(self.satellite.orbit.nSB_I[i])
                     self.results_data['H_total_' + axis].append((self.satellite.H_total)[i])
+                    self.results_data['w_sat_ref_' + axis].append(self.satellite.w_ref[i])
                 
                 q_ref = [self.satellite.q_ref.x, self.satellite.q_ref.y, self.satellite.q_ref.z, self.satellite.q_ref.w]
                 for i, axis in enumerate(my_utils.q_axes):
@@ -95,6 +123,34 @@ class Logger:
                     self.results_data['E_est_' + str(i)].append(self.satellite.E[i][i])
                     self.results_data['f_wheels_' + str(i)].append(self.satellite.f_wheels[i])
                     self.results_data['u_a_' + str(i)].append(self.satellite.fault_module.u_a[i])
+                
+                if self.config['controller']['type'] == 'backstepping':
+                    if self.config['controller']['sub_type'].startswith('Nadafi'): 
+                        self.results_data['Z_norm'].append(np.linalg.norm(self.satellite.controller.nadafi_controller.Z))
+                        for i, axis in enumerate(my_utils.xyz_axes):
+                            if i == self.satellite.controller.nadafi_controller.f_idx:
+                                self.results_data['Z_' + axis].append(np.nan) # log NaN for the faulty axis
+                                self.results_data['F_' + axis].append(np.nan)
+                            else:
+                                self.results_data['Z_' + axis].append(self.satellite.controller.nadafi_controller.Z[i,0])
+                                self.results_data['F_' + axis].append(self.satellite.controller.nadafi_controller.F[i,0])
+                        # if self.config['controller']['sub_type'].endswith('FNDO'):
+                        for i, axis in enumerate(my_utils.xyz_axes):
+                            if i == self.satellite.controller.nadafi_controller.f_idx:
+                                self.results_data['chi_0_' + axis].append(np.nan)
+                                self.results_data['chi_1_' + axis].append(np.nan)
+                                self.results_data['v_0_' + axis].append(np.nan)
+                            else:
+                                self.results_data['chi_0_' + axis].append(self.satellite.controller.nadafi_controller.chi_0[i,0])
+                                self.results_data['chi_1_' + axis].append(self.satellite.controller.nadafi_controller.chi_1[i,0])
+                                self.results_data['v_0_' + axis].append(self.satellite.controller.nadafi_controller.v_0[i,0])
+                        # if self.config['controller']['sub_type'] == 'Nadafi_MFNDO':
+                        for i, axis in enumerate(my_utils.xyz_axes):
+                            if i == self.satellite.controller.nadafi_controller.f_idx:
+                                self.results_data['mu_' + axis].append(np.nan)
+                            else:
+                                self.results_data['mu_' + axis].append(self.satellite.controller.nadafi_controller.mu[i,0])
+
 
                 # self.results_data['control_adaptive_model_output'] = self.satellite.controller.control_adaptive_model_output
                 # for i, axis in enumerate(my_utils.xyz_axes):

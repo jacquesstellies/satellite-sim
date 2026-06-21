@@ -39,10 +39,12 @@ class NadafiController:
     Gamma_mu22 = None
     t_sample = None
 
+    F = np.asmatrix(np.zeros(2)).T
     chi_0 = np.asmatrix(np.zeros(2)).T
     chi_1 = np.asmatrix(np.zeros(2)).T
     v_0 = np.asmatrix(np.zeros(2)).T
-    mu = np.asmatrix(np.ones(2)*0.00001).T
+    mu = np.asmatrix(np.ones(2)*0.3).T
+    f_idx = 2 # fault index
 
     config = None
     
@@ -87,38 +89,39 @@ class NadafiController:
             self.alpha_2 = Nadafi_config['alpha_2']
             self.Gamma_mu11 = Nadafi_config['Gamma_mu11']
             self.Gamma_mu22 = Nadafi_config['Gamma_mu22']
+        
+        self.nf_idx = [i for i in range(3) if i != self.f_idx] # no fault indices
+        self.J_0_r = np.array(self.config['satellite']['M_Inertia'])[self.nf_idx][:, self.nf_idx]
 
-    def calc_output_BS(self, q_err: np.quaternion, w : np.array, w_d : np.array):
-        f_idx = 2 # fault index
-        nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
+        self.J_0_r_inv = np.linalg.inv(self.J_0_r)
 
-        J_0_r = np.array(self.config['satellite']['M_Inertia'])[nf_idx][:, nf_idx]
+    def calc_output_BS(self, q_err: np.quaternion, w : np.array, w_d : np.array, dw_d : np.array):
 
         C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-        # C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+        # C_r = np.array([[C[self.nf_idx[0],self.nf_idx[0]], C[self.nf_idx[0],self.nf_idx[1]]], [C[self.nf_idx[1],self.nf_idx[0]], C[self.nf_idx[1],self.nf_idx[1]]]])
         # C = my_utils.conv_quat_to_dcm_nadafi(q_err)
         C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
 
-        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
+        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any self.nf_idx
         q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
 
         w_d = my_utils.col_vec(w_d)
         w = my_utils.col_vec(w)
 
-        w_r = np.array([w[nf_idx[0],0], w[nf_idx[1],0]])
+        w_r = np.array([w[self.nf_idx[0],0], w[self.nf_idx[1],0]])
 
         w_err = w - C@w_d
-        # w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
+        # w_err_r = my_utils.col_vec(np.array([w_err[self.nf_idx[0]], w_err[self.nf_idx[1]]]))
         w_err_r = my_utils.col_vec(np.array([w_err[0], w_err[1]]))
         # w_err_r = np.array([w_err[0], w_err[1]])
 
-        dw_d = my_utils.col_vec(np.zeros(3))
-        # dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
-        dw_d_r = my_utils.col_vec(np.array([[dw_d[0]], [dw_d[1]]]))
+        dw_d = my_utils.col_vec(dw_d)
+        # dw_d_r = my_utils.col_vec(np.array([dw_d[self.nf_idx[0]], dw_d[self.nf_idx[1]]]))
+        dw_d_r = my_utils.col_vec(np.array([dw_d[0,0], dw_d[1,0]]))
 
-        F = -C_r@dw_d_r + (C[2,0]*w_d[2,0] + C[2,1]*w_d[1,0])*my_utils.col_vec(np.array([w_err[1,0], -w_err[0,0]]))
-        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        # F = np.zeros(2)
+        self.F = -C_r@dw_d_r + (C[2,0]*w_d[0,0] + C[2,1]*w_d[1,0])*my_utils.col_vec(np.array([w_err[1,0], -w_err[0,0]]))
+        # self.F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
+        # self.F = np.zeros(2)
 
         phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, 
                                    self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
@@ -126,147 +129,129 @@ class NadafiController:
         dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], 
                          [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
 
-        Z = w_err_r - phi
+        self.Z = w_err_r - phi
 
-        # u_r = - F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ Z
-        u_r = - F + dphi@Aq@(Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
-        # print(f"t: qe=[{q_err.w:.4f},{q_err.x:.4f},{q_err.y:.4f},{q_err.z:.4f}] "
-        # f"|Z|={np.linalg.norm(Z):.4f} u_r={u_r.flatten()}"
-        # f"Z={Z.flatten()}"
-        # , file=sys.stderr)
+        # u_r = - self.F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ self.Z
+        u_r = - self.F + dphi@Aq@(self.Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z
 
-        h_w = -1*J_0_r @ u_r #+ np  .skew_symmetric(w_r) @ J_0_r @ w_r
+        h_w = -1*self.J_0_r @ u_r #+ np  .skew_symmetric(w_r) @ self.J_0_r @ w_r
         return np.array([h_w[0,0], h_w[1,0], 0])
         # return np.array([u_r[0], u_r[1], 0])
     
     ##############################################################################################
-    def calc_output_BS_FNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array):
-        f_idx = 2 # fault index
-        nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
-
-        J_0_r = np.array(self.config['satellite']['M_Inertia'])[nf_idx][:, nf_idx]
-        J_0_inv_r = np.array(self.satellite.M_inertia_inv)[nf_idx][:, nf_idx]
+    def calc_output_BS_FNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array, dw_d : np.array):
+        self.nf_idx = [i for i in range(3) if i != self.f_idx] # no fault indices
 
         C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-        # C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+        # C_r = np.array([[C[self.nf_idx[0],self.nf_idx[0]], C[self.nf_idx[0],self.nf_idx[1]]], [C[self.nf_idx[1],self.nf_idx[0]], C[self.nf_idx[1],self.nf_idx[1]]]])
         # C = my_utils.conv_quat_to_dcm_nadafi(q_err)
         C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
 
-        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
+        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any self.nf_idx
         q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
 
         w_d = my_utils.col_vec(w_d)
         w = my_utils.col_vec(w)
 
-        w_r = np.array([w[nf_idx[0],0], w[nf_idx[1],0]])
+        w_r = np.array([w[self.nf_idx[0],0], w[self.nf_idx[1],0]])
 
         w_err = w - C@w_d
-        # w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
+        # w_err_r = my_utils.col_vec(np.array([w_err[self.nf_idx[0]], w_err[self.nf_idx[1]]]))
         w_err_r = my_utils.col_vec(np.array([w_err[0], w_err[1]]))
         # w_err_r = np.array([w_err[0], w_err[1]])
 
-        dw_d = my_utils.col_vec(np.zeros(3))
-        # dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
-        dw_d_r = my_utils.col_vec(np.array([[dw_d[0]], [dw_d[1]]]))
+        dw_d = my_utils.col_vec(dw_d)
+        # dw_d_r = my_utils.col_vec(np.array([dw_d[self.nf_idx[0]], dw_d[self.nf_idx[1]]]))
+        dw_d_r = my_utils.col_vec(np.array([dw_d[0,0], dw_d[1,0]]))
 
-        F = -C_r@dw_d_r + (C[2,0]*w_d[2,0] + C[2,1]*w_d[1,0])*my_utils.col_vec(np.array([w_err[1,0], -w_err[0,0]]))
-        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        # F = np.zeros(2)
+        self.F = -C_r@dw_d_r + (C[2,0]*w_d[0,0] + C[2,1]*w_d[1,0])*my_utils.col_vec(np.array([w_err[1,0], -w_err[0,0]]))
 
         phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, 
                                    self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
         dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], 
                          [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
 
-        Z = w_err_r - phi
+        self.Z = w_err_r - phi
 
         L = np.array([[self.L11, 0], [0, self.L22]])
 
         v_temp = np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r))
         self.v_0 = -self.kappa_0*np.diag([v_temp[0,0], v_temp[1,0]])@np.sign(self.chi_0 - w_err_r) + self.chi_1
         u_wheels_prev =  my_utils.col_vec(u_wheels_prev)
-        dchi_0 = self.v_0 + -1 * J_0_inv_r @ u_wheels_prev[nf_idx,] + F
+        dchi_0 = self.v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F
         dchi_1 = -self.kappa_1 * L @ np.sign(self.chi_1 - self.v_0)
-        # dchi_1 = np.zeros(2)
 
         self.chi_0 = self.chi_0 + dchi_0*self.t_sample
         self.chi_1 = self.chi_1 + dchi_1*self.t_sample
 
-        u_r = - self.chi_1 - F + dphi@Aq@(Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z
-        h_w = -1*J_0_r @ u_r
+        u_r = - self.chi_1 - self.F + dphi@Aq@(self.Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z
+        h_w = -1*self.J_0_r @ u_r
         
         return np.array([h_w[0,0], h_w[1,0], 0])
     
-    def calc_output_BS_MFNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array):
-        # @TODO implement MFNDO version of Nadafi controller
-        
-        u_wheels_prev = my_utils.col_vec(u_wheels_prev)
-        w = my_utils.col_vec(w)
-
-        f_idx = 2 # fault index
-        nf_idx = [i for i in range(3) if i != f_idx] # no fault indices
+    def calc_output_BS_MFNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array, dw_d : np.array):
+        self.nf_idx = [i for i in range(3) if i != self.f_idx] # no fault indices
 
         C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-        C_r = np.array([[C[nf_idx[0],nf_idx[0]], C[nf_idx[0],nf_idx[1]]], [C[nf_idx[1],nf_idx[0]], C[nf_idx[1],nf_idx[1]]]])
+        # C_r = np.array([[C[self.nf_idx[0],self.nf_idx[0]], C[self.nf_idx[0],self.nf_idx[1]]], [C[self.nf_idx[1],self.nf_idx[0]], C[self.nf_idx[1],self.nf_idx[1]]]])
+        # C = my_utils.conv_quat_to_dcm_nadafi(q_err)
+        C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
 
-        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any nf_idx
+        Aq = 0.5*np.array([[q_err.w, -q_err.z], [q_err.z, q_err.w], [-q_err.y, q_err.x]]) # @TODO generalize for any self.nf_idx
         q_err_vec = my_utils.col_vec(np.array([q_err.x, q_err.y, q_err.z]))
 
-        w_d = my_utils.col_vec(np.array([0, 0, 0])) # desired angular velocity
-        w_d_r = w_d
-        w_r = my_utils.col_vec(np.array([w[nf_idx[0]], w[nf_idx[1]]]))
-        
+        w_d = my_utils.col_vec(w_d)
+        w = my_utils.col_vec(w)
+
+        w_r = np.array([w[self.nf_idx[0],0], w[self.nf_idx[1],0]])
+
         w_err = w - C@w_d
-        w_err_r = my_utils.col_vec(np.array([w_err[nf_idx[0]], w_err[nf_idx[1]]]))
+        # w_err_r = my_utils.col_vec(np.array([w_err[self.nf_idx[0]], w_err[self.nf_idx[1]]]))
+        w_err_r = my_utils.col_vec(np.array([w_err[0], w_err[1]]))
+        # w_err_r = np.array([w_err[0], w_err[1]])
 
-        dw_d = np.zeros(3)
-        dw_d_r = my_utils.col_vec(np.array([dw_d[nf_idx[0]], dw_d[nf_idx[1]]]))
+        dw_d = my_utils.col_vec(dw_d)
+        # dw_d_r = my_utils.col_vec(np.array([dw_d[self.nf_idx[0]], dw_d[self.nf_idx[1]]]))
+        dw_d_r = my_utils.col_vec(np.array([dw_d[0,0], dw_d[1,0]]))
 
-        # F = -C_r@dw_d_r + (C[2,0]*w_d[2] + C[2,0]*w_d[1])*np.array([w_err[1], -w_err[0]])
-        F = my_utils.col_vec(np.zeros(2))
-
-        # v_0 = -k_0*diag(np.sqrt(L)@np.sqrt(np.abs(my_utils.col_vec(chi_0) - my_utils.col_vec(w_err_r))))@np.sign(my_utils.col_vec(chi_0) - my_utils.col_vec(w_err_r)) + my_utils.col_vec(chi_1)
-        # v_0 = np.array([v_0[0,0], v_0[1,0]])
-        L = np.diag([self.L11, self.L22])
-        # print(self.chi_0.shape)
-        # print(w_err_r.shape)
-        # print(np.sqrt(L).shape)
-        # print(np.sqrt(np.abs(self.chi_0 - w_err_r)).shape)
-        # print(self.kappa_0)
-        # print(np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r)))
-        v_temp = np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r))
-        self.v_0 = -self.kappa_0*np.diag([v_temp[0,0], v_temp[1,0]])@np.sign(self.chi_0 - w_err_r) + self.chi_1
-        
-        dchi_0 = self.v_0 + u_wheels_prev[nf_idx] + F
-        dchi_1 = -self.kappa_1 * L @ np.sign(self.chi_1 - self.v_0)
-        # dchi_1 = np.zeros(2)
-
-        self.chi_0 = self.chi_0 + dchi_0*self.t_sample
-        self.chi_1 = self.chi_1 + dchi_1*self.t_sample
+        self.F = -C_r@dw_d_r + (C[2,0]*w_d[0,0] + C[2,1]*w_d[1,0])*my_utils.col_vec(np.array([w_err[1,0], -w_err[0,0]]))
 
         phi = -2*my_utils.col_vec([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, 
                                    self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
-        # phi = -2*np.array([self.a*q_err.y*q_err.z + q_err.w*q_err.x*self.lambda_1, self.b*q_err.x *q_err.z + q_err.w*q_err.y*self.lambda_2])
         dphi = np.array([[-2*self.lambda_1*q_err.w, -2*self.a*q_err.z, -2*self.a*q_err.y], 
                          [-2*self.b*q_err.z, -2*self.lambda_2*q_err.w, -2*self.b*q_err.x]])
-        Z = w_err_r - phi
-        temp_1 = Aq@(Z+phi)
+
+        self.Z = w_err_r - phi
+
+        L = np.array([[self.L11, 0], [0, self.L22]])
+
+        v_temp = np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r))
+        self.v_0 = -self.kappa_0*np.diag([v_temp[0,0], v_temp[1,0]])@np.sign(self.chi_0 - w_err_r) + self.chi_1
+        u_wheels_prev =  my_utils.col_vec(u_wheels_prev)
+        dchi_0 = self.v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F
+        dchi_1 = -self.kappa_1 * L @ np.sign(self.chi_1 - self.v_0)
+
+        self.chi_0 = self.chi_0 + dchi_0*self.t_sample
+        self.chi_1 = self.chi_1 + dchi_1*self.t_sample
+        
+        temp_1 = Aq@(self.Z+phi)
         temp_2 = dphi@temp_1
 
-        temp_3 = (self.mu@Z.T)/np.linalg.norm(self.mu)**2
+        temp_3 = (self.mu@self.Z.T)/np.linalg.norm(self.mu)**2
         temp_4 = my_utils.sat_delta_vec(self.mu)*self.alpha_1
 
         dmu = temp_3 @ \
-            (temp_4 - F - self.chi_1 + temp_2 - \
+            (temp_4 - self.F - self.chi_1 + temp_2 - \
              (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - \
-             np.diag([self.Gamma_z11, self.Gamma_z22]) @ Z) \
+             np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z) \
                     - np.diag([self.Gamma_mu11, self.Gamma_mu22])@self.mu      
 
         self.mu = self.mu + dmu*self.t_sample
 
-        u_r = -1*temp_4 - self.alpha_2*my_utils.sat_delta_vec(Z)
-
-        return np.array([u_r[0,0], u_r[1,0], 0])
+        u_r = -1*temp_4 - self.alpha_2*my_utils.sat_delta_vec(self.Z)
+        h_w = -1*self.J_0_r @ u_r
+        
+        return np.array([h_w[0,0], h_w[1,0], 0])
 
 class ZarouratiController:
     satellite = None
@@ -711,20 +696,20 @@ class Controller:
                 
         elif self.config["controller"]["sub_type"] == "Nadafi_FNDO":
            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-           u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_ref)
+           u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_ref, satellite.dw_ref)
 
         elif self.config["controller"]["sub_type"] == "Nadafi_BS":
             q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-            u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_ref)
+            u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_ref, satellite.dw_ref)
 
         elif self.sub_type == "Nadafi_MFNDO":
             q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-            u = self.nadafi_controller.calc_output_BS_MFNDO(q_err, w, self.u_wheels_prev)
+            u = self.nadafi_controller.calc_output_BS_MFNDO(q_err, w, self.u_wheels_prev, satellite.w_ref, satellite.dw_ref)
 
         
         elif self.sub_type == "Zarourati":
             q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-            u = self.zarourati_controller.calc_output(q_err, w, t)
+            u = self.zarourati_controller.calc_output(q_err, w, self.u_wheels_prev, t)
 
         return u
 
