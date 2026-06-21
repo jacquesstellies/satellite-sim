@@ -34,6 +34,9 @@ class Satellite(Body):
     q_ref_series : list = None
     t_ref_series : list = None
     w_ref = np.zeros(3)
+    dw_ref = np.zeros(3)
+    sinusoidal_ref_amplitude = np.zeros(3)
+    sinusoidal_ref_frequency = np.zeros(3)
 
     dir_init = Rotation.from_quat([0,0,0,1])
 
@@ -106,8 +109,9 @@ class Satellite(Body):
         self.f_wheels = np.zeros(self.wheel_module.num_wheels)
 
         # Control Variables
-        if config['satellite']['use_ref_euler'] + config['satellite']['use_ref_q'] + config['satellite']['use_ref_series'] != 1:
-            raise(Exception("exactly one of use_ref_euler, use_ref_q, use_ref_series must be true"))
+        if not self.mode.startswith("nominal"):
+            if config['satellite']['use_ref_euler'] + config['satellite']['use_ref_q'] + config['satellite']['use_ref_series'] != 1:
+                raise(Exception("exactly one of use_ref_euler, use_ref_q, use_ref_series must be true"))
         if self.mode == "ref_pointing":
             if config['satellite']['use_ref_euler']:
                 q_ref_array = Rotation.from_euler("xyz", config['satellite']['ref_euler'], degrees=True).as_quat()
@@ -119,7 +123,8 @@ class Satellite(Body):
                 t_ref_series = config['satellite']['ref_t_series']
                 q_series = config['satellite']['ref_q_series']
                 if len(t_ref_series) == len(q_series):
-                    # self.q_ref = Rotation.from_quat(q_series[0]).as_quat()
+                    self.q_ref = Rotation.from_quat(q_series[0]).as_quat()
+                    self.q_ref_series = []
                     # self.q_ref_series = Rotation.from_quat(q_series)
                     for i in range(len(t_ref_series)):
                         self.q_ref_series.append(np.quaternion(q_series[i][3], q_series[i][0], q_series[i][1], q_series[i][2])) # check if valid quaternion
@@ -133,6 +138,10 @@ class Satellite(Body):
         
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
+        self.next_t_ref_update_interval = config['controller']['t_sample']
+
+        self.sinusoidal_ref_amplitude = np.array(config['satellite']['sinusoidal_ref_amplitude_deg']) * my_utils.DEG_TO_RAD
+        self.sinusoidal_ref_frequency = np.array(config['satellite']['sinusoidal_ref_frequency'])
         
     def calc_face_properties(self):
         model = self.config['satellite']['dimensions']['model']
@@ -220,7 +229,15 @@ class Satellite(Body):
     t_ref_update = 0
     q_ref_series_index = 0
     init = True
+    next_t_ref_update = 0.0
+    next_t_ref_update_interval = None
     def update_ref_q(self, t):
+        if t >= self.next_t_ref_update:
+            self.next_t_ref_update = t + self.next_t_ref_update_interval
+        else:
+            return
+        self.update_mode()
+
         if self.init and self.mode != "ref_pointing":
             self.w_ref = np.zeros(3)
             self.init = False
@@ -236,15 +253,15 @@ class Satellite(Body):
             x_axis = self.orbit.nSB_I
             z_axis = self.orbit.nIB_I
             y_axis = my_utils.cross_product_M31M31(self.orbit.nIB_I, x_axis)
-        
+            # q_ref_prev = self.q_ref
             self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis]).T))
-
+            # self.w_ref = 
             # self.q_ref = Rotation.from_matrix(r_matrix).as_quat()
 
         if self.mode == "nominal_night":
             self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI))
-            w_OI = np.cross(self.orbit.sBI_I, self.orbit.DIsBI_I) / np.linalg.norm(self.orbit.sBI_I)**2
-            self.w_ref = w_OI
+            wOI_I = my_utils.cross_product_M31M31(self.orbit.sBI_I, self.orbit.DIsBI_I) / np.linalg.norm(self.orbit.sBI_I)**2
+            self.w_ref = wOI_I
             # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
 
         if self.mode == "ref_pointing":
@@ -259,6 +276,42 @@ class Satellite(Body):
                 self.q_ref = self.q_ref_series[self.q_ref_series_index]
                 self.q_ref_series_index += 1
                 print("new ref q=", print(self.q_ref), " at t=", t)
+        
+        if self.mode == "sinusoidal":
+            # freq = self.sinusoidal_ref_frequency
+            # amp = self.sinusoidal_ref_amplitude  # already in radians (see __init__)
+
+            # def _R_ref_at(tau):
+            #     return Rotation.from_euler("xyz", [amp[0]*np.sin(freq[0]*tau),
+            #                                        amp[1]*np.sin(freq[1]*tau),
+            #                                        amp[2]*np.sin(freq[2]*tau)], degrees=False)
+
+            # # Reference body angular velocity / acceleration via central finite differences.
+            # # w_ref is the rate of the reference frame expressed in the reference frame, which
+            # # is what the controller feedforward (C@w_d, -C_r@dw_d) expects.
+            # dt = 1e-3
+            # R0 = _R_ref_at(t)
+            # R_fwd = (R0.inv() * _R_ref_at(t + dt)).as_rotvec() / dt
+            # R_bwd = (_R_ref_at(t - dt).inv() * R0).as_rotvec() / dt
+            # self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(R0)
+            # self.w_ref = 0.5 * (R_fwd + R_bwd)
+            # self.dw_ref = (R_fwd - R_bwd) / dt
+
+            freq = self.sinusoidal_ref_frequency
+            amp  = self.sinusoidal_ref_amplitude          # radians (see __init__)
+
+            # Fixed axis in the body x-y plane; oscillate the angle only.
+            # rotvec(t) = [amp_x, amp_y, 0] * sin(w t)  -> axis is constant, so
+            #   q_ref has q1,q2 components and q3 = 0
+            #   w_ref = d/dt(rotvec) is parallel to that axis -> omega_z = 0  (trackable)
+            s   =  np.sin(freq[0] * t)
+            c   =  freq[0]      * np.cos(freq[0] * t)
+            cdd = -freq[0]**2   * np.sin(freq[0] * t)
+            axis = np.array([amp[0], amp[1], 0.0])         # direction = axis, magnitude = angle amplitude
+
+            self.q_ref  = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_rotvec(axis * s))
+            self.w_ref  = axis * c                          # exact body rate, z-component = 0
+            self.dw_ref = axis * cdd                        # exact angular acceleration
     
     def calc_delta_M_inertia(self, t):
         return np.diag(np.array([2*np.sin(0.1*t), 2.8*np.sin(0.2*t), 3.6*np.sin(0.3*t)]))
@@ -276,7 +329,6 @@ class Satellite(Body):
         w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
         dcm = Rotation.from_quat([self.q.x, self.q.y, self.q.z, self.q.w]).as_matrix()
 
-        self.update_mode()
         self.update_ref_q(t)
         ### Calculate controller output
         if self.controller.enable is True:
@@ -304,12 +356,12 @@ class Satellite(Body):
         self.orbit.calc_orbit_state(t)
 
         self.T_dist = self.disturbances.calc_torque(self, dcm, t)
-        # delta_M_inertia = self.calc_delta_M_inertia(t)
-        # delta_M_inertia = np.zeros((3,3))
-        # M_inertia_effective = self.M_inertia + delta_M_inertia
-        # M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
+        
+        delta_M_inertia = self.calc_delta_M_inertia(t)
+        M_inertia_effective = self.M_inertia + delta_M_inertia
+        M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
 
-        M_inertia_effective_inv = self.M_inertia_inv
+        # M_inertia_effective_inv = self.M_inertia_inv
 
         self.H = self.M_inertia@(self.w)
         self.H_total = self.H + self.wheel_module.H_vec
