@@ -314,6 +314,10 @@ class Simulation:
         self.results_df['euler_axis_sat_error'] = self.results_df['q_sat_error_w'].apply(lambda w: 2*np.arccos(w))
         self.results_df['euler_axis_sat_error_deg'] = self.results_df['euler_axis_sat_error'] * 180 / np.pi
         self.logger.log(f"use_only_sol: {use_only_sol}")
+        
+        for axis in my_utils.xyz_axes:
+            self.results_df[f'w_sat_error_{axis}'] = self.results_df[f'w_sat_{axis}'] - self.results_df[f'w_sat_ref_{axis}']
+
         if use_only_sol == False:
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
                 self.logger.log(f"calculating T_wheels_est_{i}")
@@ -822,8 +826,6 @@ def main():
                 if config['output']['accuracy_enable']:
                     simulation.calc_accuracy_output_results()  
 
-                simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
-
                 ## Row should be in the form of (row_name, [axes], label)
                 cols = 2
                 rows = [ ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)'), 
@@ -844,13 +846,13 @@ def main():
                     rows_2.append(('E', _axes, 'Actuator Authority Estimate (Fraction)'))
                     rows_2.append(('f_wheels', _axes, 'Disturbance Torque (Nm)'))
                     rows_2.append(('u_a', _axes, 'Additive Fault (Nm)'))
-
-                    rows_2.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
-                    rows_2.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
-                    rows_2.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
-                    rows_2.append(('f_wheels_error', _axes, 'Disturbance Torque Error (Nm)'))
-                    rows_2.append(('E_est', _axes, 'Actuator Authority Estimate (Fraction)'))
-                    
+                    if satellite.observer_module.enable:
+                        rows_2.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
+                        rows_2.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
+                        rows_2.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
+                        rows_2.append(('f_wheels_error', _axes, 'Disturbance Torque Error (Nm)'))
+                        rows_2.append(('E_est', _axes, 'Actuator Authority Estimate (Fraction)'))
+                        
                 if controller.type == "adaptive":
                     rows.append(('control_adaptive_model_output',['none']))
                     rows.append(('control_theta',my_utils.xyz_axes))
@@ -858,6 +860,8 @@ def main():
                 rows_2.append(('q_sat_ref', my_utils.q_axes, 'Reference Quaternion'))
                 # rows_2.append(('q_sat_vec_ref', ['x', 'y', 'z'], 'Reference Quaternion Vector'))
                 rows_2.append(('q_sat_error', my_utils.q_axes, 'Quaternion Error (satellite to reference)'))
+                rows_2.append(('w_sat_ref', my_utils.xyz_axes, 'Reference Angular Velocity (rad/s)'))
+                rows_2.append(('w_sat_error', my_utils.xyz_axes, 'Angular Velocity Error (rad/s)'))
                 rows_2.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
                 rows_2.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
                 # rows_2.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
@@ -866,8 +870,22 @@ def main():
                 rows_2.append(('s_sat_eci', my_utils.xyz_axes, 'Satellite Position ECI (km)'))
                 rows_2.append(('v_sat_eci', my_utils.xyz_axes, 'Satellite Velocity ECI (km/s)'))
                 rows_2.append(('n_sun', my_utils.xyz_axes, 'Sun Vector (unitless)'))
-                
-                
+
+                # Nadafi auxiliary variables
+                if controller.type == "backstepping":
+                    if controller.sub_type.startswith("Nadafi"):
+                        rows_2.append(('F', my_utils.xyz_axes, 'F rad/s^2'))
+                        rows_2.append(('Z_norm', ['none'], 'Z norm rad/s'))
+                        rows_2.append(('Z', my_utils.xyz_axes, 'Z rad/s'))
+                        rows_2.append(('term_1', my_utils.xyz_axes, 'term_1 (Nm)'))
+                        rows_2.append(('term_2', my_utils.xyz_axes, 'term_2 (Nm)'))
+                        # if controller.sub_type == "Nadafi_FNDO":
+                        rows_2.append(('v_0', my_utils.xyz_axes, 'v_0 (rad/s)'))
+                        rows_2.append(('chi_0', my_utils.xyz_axes, 'chi_0 (rad/s)'))
+                        rows_2.append(('chi_1', my_utils.xyz_axes, 'chi_1 (Nm   )'))
+                        rows_2.append(('mu', my_utils.xyz_axes, 'mu (rad/s)'))
+
+
                 simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
                 simulation.create_plots_combined(rows, cols, simulation.results_df, config, LOG_FILE_NAME)
 
@@ -876,19 +894,31 @@ def main():
                 simulation.create_3D_quaternion_plot(simulation.results_df, config, LOG_FILE_NAME)
 
                 if satellite.wheels_control_enable:
-                    simulation.create_plots_comparison([('w_wheels', _axes),
-                                        ('w_wheels_est', _axes)
-                                        ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                    simulation.create_plots_comparison([('T_wheels', _axes),
-                                        ('T_wheels_est', _axes)
-                                        ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                    simulation.create_plots_comparison([('E', _axes), ('E_est', _axes)
-                                        ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                    if satellite.observer_enable:
+                        simulation.create_plots_comparison([('w_wheels', _axes),
+                                            ('w_wheels_est', _axes)
+                                            ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                        simulation.create_plots_comparison([('T_wheels', _axes),
+                                            ('T_wheels_est', _axes)
+                                            ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                        simulation.create_plots_comparison([('E', _axes), ('E_est', _axes)
+                                            ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
 
                     simulation.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
                     
                     simulation.create_plots_comparison([('q_sat', ['x', 'y', 'z']),('q_sat_ref', ['x', 'y', 'z'])], 'Quaternion', 'q_sat_vs_ref_vec', simulation.results_df, config, LOG_FILE_NAME, show=False)
-            
+
+                    inertia = np.asarray(config['satellite']['M_Inertia'])
+                    # chi_1 = simulation.results_df[['chi_1_x', 'chi_1_y', 'chi_1_z']].to_numpy()
+                    # simulation.results_df[['J0*chi_1_x', 'J0*chi_1_y', 'J0*chi_1_z']] = chi_1 @ inertia
+                    d = simulation.results_df[['T_dist_x', 'T_dist_y', 'T_dist_z']].to_numpy()
+                    simulation.results_df[['d_x', 'd_y', 'd_z']] = d @ np.linalg.inv(inertia)
+                    simulation.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], 'Nm', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, show=False)
+
+                    simulation.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], 'rad/s', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                
+                    simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
+
                 if config['output']['visualizer']['enable'] is True:
                     json_data, results_df = viz.convert_results_df_to_json(simulation.results_df, config['output']['visualizer']['t_sample'])
                     # open(config['output']['visualizer']['file_path'], "w").write(json_data)
