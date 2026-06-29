@@ -33,6 +33,7 @@ class Satellite(Body):
     ref_T = np.zeros(3)
     q_ref_series : list = None
     t_ref_series : list = None
+    _tracking_keys_cache = None
     w_ref = np.zeros(3)
     dw_ref = np.zeros(3)
     sinusoidal_ref_amplitude = np.zeros(3)
@@ -238,7 +239,7 @@ class Satellite(Body):
             return
         self.update_mode()
 
-        if self.init and self.mode != "ref_pointing":
+        if self.init and self.mode not in ("ref_pointing", "tracking"):
             self.w_ref = np.zeros(3)
             self.init = False
             return
@@ -312,7 +313,43 @@ class Satellite(Body):
             self.q_ref  = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_rotvec(axis * s))
             self.w_ref  = axis * c                          # exact body rate, z-component = 0
             self.dw_ref = axis * cdd                        # exact angular acceleration
-    
+
+        if self.mode == "tracking":
+            # Zarourati-style snapshot-imaging maneuver: smoothly slew (SLERP with
+            # smootherstep timing) through the ref_q_series waypoints, settling at rest at
+            # each one. Reference body rate / acceleration come from central finite
+            # differences so the controller feedforward (w_ref, dw_ref) stays consistent.
+            # Starts at ref_q_series[0]; set euler_init to match it for zero initial error.
+            self.init = False
+            dt = 1e-3
+            R0 = self._tracking_q_ref_at(t)
+            R_fwd = (R0.inv() * self._tracking_q_ref_at(t + dt)).as_rotvec() / dt
+            R_bwd = (self._tracking_q_ref_at(t - dt).inv() * R0).as_rotvec() / dt
+            self.q_ref  = my_utils.conv_Rotation_obj_to_numpy_q(R0)
+            self.w_ref  = 0.5 * (R_fwd + R_bwd)
+            self.dw_ref = (R_fwd - R_bwd) / dt
+
+    def _tracking_keys(self):
+        if self._tracking_keys_cache is None:
+            q_series = self.config['satellite']['ref_q_series']   # each [x, y, z, w]
+            t_series = self.config['satellite']['ref_t_series']
+            rots = [Rotation.from_quat(q) for q in q_series]
+            self._tracking_keys_cache = (rots, np.array(t_series, dtype=float))
+        return self._tracking_keys_cache
+
+    def _tracking_q_ref_at(self, tau):
+        rots, times = self._tracking_keys()
+        if tau <= times[0]:
+            return rots[0]
+        if tau >= times[-1]:
+            return rots[-1]
+        i = int(np.searchsorted(times, tau) - 1)
+        i = max(0, min(i, len(times) - 2))
+        s = (tau - times[i]) / (times[i + 1] - times[i])
+        s = s*s*s*(s*(s*6 - 15) + 10)          # smootherstep: C2, zero rate/accel at waypoints
+        rel = (rots[i].inv() * rots[i + 1]).as_rotvec()
+        return rots[i] * Rotation.from_rotvec(s * rel)
+
     def calc_delta_M_inertia(self, t):
         return np.diag(np.array([2*np.sin(0.1*t), 2.8*np.sin(0.2*t), 3.6*np.sin(0.3*t)]))
 

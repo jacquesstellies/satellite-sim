@@ -44,7 +44,7 @@ class MagtModule():
                 k = 1
                 self.T[2] = -1 * my_utils._sign(w_sat[2]) * k
                 self.T[2] = my_utils.low_pass_filter(self.T[2], self.prev, 0.5)
-            case "momentum_dumping":
+            case "momentum_dump_xyz":
                 m = np.ones(3)*self.config['magt']['mag_moment_max']
                 k = 1.0
                 self.T = -1 * my_utils.sat_vec(k*H_sat, 0.1)

@@ -894,7 +894,7 @@ def main():
                 simulation.create_3D_quaternion_plot(simulation.results_df, config, LOG_FILE_NAME)
 
                 if satellite.wheels_control_enable:
-                    if satellite.observer_enable:
+                    if satellite.observer_module.enable:
                         simulation.create_plots_comparison([('w_wheels', _axes),
                                             ('w_wheels_est', _axes)
                                             ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
