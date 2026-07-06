@@ -123,6 +123,8 @@ def parse_args():
             overide = config['output']['log_file_name_overide']
             if overide == "None" or overide == "":
                 LOG_FILE_NAME = create_default_log_file_name(config)
+            else:
+                LOG_FILE_NAME = overide
     else:
         LOG_FILE_NAME = args["output_name"]
 
@@ -913,10 +915,10 @@ def main():
                     # simulation.results_df[['J0*chi_1_x', 'J0*chi_1_y', 'J0*chi_1_z']] = chi_1 @ inertia
                     d = simulation.results_df[['T_dist_x', 'T_dist_y', 'T_dist_z']].to_numpy()
                     simulation.results_df[['d_x', 'd_y', 'd_z']] = d @ np.linalg.inv(inertia)
-                    simulation.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], 'Nm', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, show=False)
 
-                    simulation.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], 'rad/s', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                
+                    if controller.sub_type.startswith("Nadafi"):
+                        simulation.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], 'Nm', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                        simulation.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], 'rad/s', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, show=False)
                     simulation.log_output_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH, test_mode_en)
 
                 if config['output']['visualizer']['enable'] is True:

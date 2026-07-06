@@ -95,6 +95,10 @@ class NadafiController:
 
         self.J_0_r_inv = np.linalg.inv(self.J_0_r)
 
+
+    term_1 = np.asmatrix(np.zeros(2)).T
+    term_2 = np.asmatrix(np.zeros(2)).T
+
     def calc_output_BS(self, q_err: np.quaternion, w : np.array, w_d : np.array, dw_d : np.array):
 
         C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
@@ -131,6 +135,8 @@ class NadafiController:
 
         self.Z = w_err_r - phi
 
+        self.term_1 = dphi@Aq@(self.Z + phi)
+        self.term_2 = (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T
         # u_r = - self.F + dphi@Aq@(w_err_r) - (q_err_vec.T @ self.Lambda @ Aq).T - self.Gamma_z @ self.Z
         u_r = - self.F + dphi@Aq@(self.Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z
 
@@ -183,6 +189,9 @@ class NadafiController:
 
         self.chi_0 = self.chi_0 + dchi_0*self.t_sample
         self.chi_1 = self.chi_1 + dchi_1*self.t_sample
+
+        self.term_1 = dphi@Aq@(self.Z + phi)
+        self.term_2 = (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T
 
         u_r = - self.chi_1 - self.F + dphi@Aq@(self.Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z
         h_w = -1*self.J_0_r @ u_r
