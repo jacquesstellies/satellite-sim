@@ -62,34 +62,50 @@ class Logger:
             self.results_data[f'w_sat_ref_{i}'] = []
             self.results_data[f'dw_sat_ref_{i}'] = []
         
-        if self.config['controller']['type'] == 'backstepping':
-            if self.config['controller']['sub_type'].startswith('Nadafi'):
-                for axis in my_utils.xyz_axes:
-                    self.results_data[f'Z_{axis}'] = []
-                    self.results_data[f'F_{axis}'] = []
-                    self.results_data[f'term_1_{axis}'] = []
-                    self.results_data[f'term_2_{axis}'] = []
-                self.results_data['Z_norm'] = []
-            # if self.config['controller']['sub_type'].endswith('FNDO'):
-                for axis in my_utils.xyz_axes:
-                    self.results_data[f'chi_0_{axis}'] = []
-                    self.results_data[f'chi_1_{axis}'] = []
-                    self.results_data[f'v_0_{axis}'] = []
-                # if self.config['controller']['sub_type'] == 'Nadafi_MFNDO':
-                for axis in my_utils.xyz_axes:
-                    self.results_data[f'mu_{axis}'] = []
-            if self.config['controller']['sub_type'] == 'Zarourati':
-                self.results_data['xi'] = []
-                self.results_data[f'kappa1'] = []
-                self.results_data[f'kappa2'] = []
-                self.results_data[f'eta_norm'] = []
-                self.results_data[f'dwe_u'] = []
-                self.results_data[f'we_u'] = []
-                self.results_data[f'phi_hat'] = []
-                for axis in my_utils.xyz_axes:
-                    self.results_data[f'eta_{axis}'] = []
-                
-                        
+        # detection-triggered reconfiguration can activate an underactuated
+        # controller at runtime, so its channels are registered whenever it
+        # *could* become active (NaN-padded while inactive to keep columns equal)
+        detection_config = config.get('detection', {})
+        self.detection_keys_en = detection_config.get('enable', False)
+        switch_to = detection_config.get('switch_to', 'Nadafi_FNDO') if self.detection_keys_en else ''
+
+        initial_backstepping = self.config['controller']['type'] == 'backstepping'
+        initial_sub_type = self.config['controller']['sub_type']
+        self.nadafi_keys_en = (initial_backstepping and initial_sub_type.startswith('Nadafi')) \
+            or switch_to.startswith('Nadafi')
+        self.zarourati_keys_en = (initial_backstepping and initial_sub_type == 'Zarourati') \
+            or switch_to == 'Zarourati'
+
+        if self.nadafi_keys_en:
+            for axis in my_utils.xyz_axes:
+                self.results_data[f'Z_{axis}'] = []
+                self.results_data[f'F_{axis}'] = []
+                self.results_data[f'term_1_{axis}'] = []
+                self.results_data[f'term_2_{axis}'] = []
+            self.results_data['Z_norm'] = []
+            for axis in my_utils.xyz_axes:
+                self.results_data[f'chi_0_{axis}'] = []
+                self.results_data[f'chi_1_{axis}'] = []
+                self.results_data[f'v_0_{axis}'] = []
+            for axis in my_utils.xyz_axes:
+                self.results_data[f'mu_{axis}'] = []
+        if self.zarourati_keys_en:
+            self.results_data['xi'] = []
+            self.results_data[f'kappa1'] = []
+            self.results_data[f'kappa2'] = []
+            self.results_data[f'eta_norm'] = []
+            self.results_data[f'dwe_u'] = []
+            self.results_data[f'we_u'] = []
+            self.results_data[f'phi_hat'] = []
+            for axis in my_utils.xyz_axes:
+                self.results_data[f'eta_{axis}'] = []
+        if self.detection_keys_en:
+            for i in range(self.satellite.wheel_module.num_wheels):
+                self.results_data[f'E_det_{i}'] = []
+            for axis in my_utils.xyz_axes:
+                self.results_data[f'chi_1_det_{axis}'] = []
+            self.results_data['det_latched_wheel'] = []
+
         self.next_timestamp = self.satellite.controller.t_sample
 
     def log_data(self, t):
@@ -128,8 +144,36 @@ class Logger:
                     self.results_data['f_wheels_' + str(i)].append(self.satellite.f_wheels[i])
                     self.results_data['u_a_' + str(i)].append(self.satellite.fault_module.u_a[i])
                 
-                if self.config['controller']['type'] == 'backstepping':
-                    if self.config['controller']['sub_type'].startswith('Nadafi'): 
+                # branch on the *runtime* controller type/sub_type (FDIR can switch
+                # them mid-run); registered-but-inactive channels get NaN
+                controller = self.satellite.controller
+                if self.nadafi_keys_en:
+                    nadafi_active = controller.type == 'backstepping' \
+                        and controller.sub_type.startswith('Nadafi') \
+                        and controller.nadafi_controller is not None
+                    if not nadafi_active:
+                        self.results_data['Z_norm'].append(np.nan)
+                        for axis in my_utils.xyz_axes:
+                            for key in ('Z', 'F', 'term_1', 'term_2', 'chi_0', 'chi_1', 'v_0', 'mu'):
+                                self.results_data[f'{key}_{axis}'].append(np.nan)
+                if self.zarourati_keys_en:
+                    zarourati_active = controller.type == 'backstepping' \
+                        and controller.sub_type == 'Zarourati' \
+                        and controller.zarourati_controller is not None
+                    if not zarourati_active:
+                        for key in ('xi', 'kappa1', 'kappa2', 'eta_norm', 'dwe_u', 'we_u', 'phi_hat'):
+                            self.results_data[key].append(np.nan)
+                        for axis in my_utils.xyz_axes:
+                            self.results_data[f'eta_{axis}'].append(np.nan)
+                if self.detection_keys_en:
+                    detector = self.satellite.fault_detector
+                    for i in range(self.satellite.wheel_module.num_wheels):
+                        self.results_data[f'E_det_{i}'].append(detector.E_est[i])
+                    for i, axis in enumerate(my_utils.xyz_axes):
+                        self.results_data[f'chi_1_det_{axis}'].append(detector.chi_1[i])
+                    self.results_data['det_latched_wheel'].append(detector.latched_wheel)
+
+                if self.nadafi_keys_en and nadafi_active:
                         self.results_data['Z_norm'].append(np.linalg.norm(self.satellite.controller.nadafi_controller.Z))
                         for i, axis in enumerate(my_utils.xyz_axes):
                             if i == self.satellite.controller.nadafi_controller.f_idx:
@@ -158,7 +202,7 @@ class Logger:
                                 self.results_data['mu_' + axis].append(np.nan)
                             else:
                                 self.results_data['mu_' + axis].append(self.satellite.controller.nadafi_controller.mu[i,0])
-                    if self.config['controller']['sub_type'] == 'Zarourati':
+                if self.zarourati_keys_en and zarourati_active:
                         self.results_data['xi'].append(self.satellite.controller.zarourati_controller.xi)
                         self.results_data['eta_norm'].append(np.linalg.norm(self.satellite.controller.zarourati_controller.eta))
                         self.results_data['kappa1'].append(self.satellite.controller.zarourati_controller.kappa1)
