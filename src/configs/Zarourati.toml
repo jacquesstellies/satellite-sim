@@ -2,7 +2,7 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 100
+duration = 300 # ref series ends at 120; extra dwell lets xi decay to its floor (accuracy)
 test_mode_en = false
 test_duration = 3
 test_resolution = 1
@@ -21,7 +21,7 @@ ki = 50
 T_max = 1000
 T_min = 0
 filter_coef = 0
-t_sample = 0.1
+t_sample = 0.01
 type = "backstepping" # pid, backstepping, adaptive
 sub_type = "Zarourati" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Zarourati
 adaptive_gain = 0.1
@@ -36,10 +36,51 @@ upsilon = 0.01
 c_1 = 0.01
 c_2 = 0.1
 
+[Zarourati]
+# Control gains (paper Table 2 uses k_w=100, k_d=5 -- tuned for a continuous-time sim.
+# At t_sample=0.01 k_w=100 gives the eta loop a ~110 rad/s bandwidth (marginal vs the
+# 100 Hz sample rate -> rail-to-rail chatter), so k_w is scaled to ~fs/10. k_d bounds the
+# disturbance (now ~1e-4 N.m per paper Eq. 38), so 5 N.m of sign(eta) is pure chatter.
+k_a = 1.0
+# k_u sets the unactuated-axis convergence rate (tau ~ 2/k_u) but also the excitation
+# demand k_u*e_u/xi, which must stay within the wheel slew authority (~0.1 rad/s here).
+# Paper's 0.5 needs e_u << xi at all times; 0.3 keeps kappa1 off its clamp during slews.
+k_u = 0.3
+k_w = 10.0
+k_d = 0.02
+k_phi = 1.0
+# Prescribed-performance xi = gamma0*exp(-gamma1*tau) + gamma2 (tau = time since activation).
+# Paper Table 2 uses gamma0=0.5, gamma1=1, gamma2=0.001, which collapses xi to its floor in
+# ~3 s and makes kappa1 = (1/xi^2)*(...) blow up before convergence. Slower decay + higher
+# floor is stable. NOTE the actuated error e_a is *commanded* to track the spiral e_d with
+# ||e_d|| = xi, so gamma0 sets the initial excitation swing (0.1 ~ 11 deg) and gamma2 sets
+# the steady-state wobble amplitude / final accuracy (~2*gamma2 rad).
+# xi must upper-bound the tracking error at all times (prescribed performance): the
+# kappa gains only give usable unactuated feedback while |k_u*e_u + e4*w_eu| < kappa_max*xi^2.
+# With xi_reset_on_maneuver, gamma0 must cover the per-slew transient (0.3; smaller values
+# let e_u escape mid-slew) and gamma1 sets accuracy at waypoint arrival (xi(30s) ~ 0.077
+# -> ~9 deg wobble; faster decay breaks the excitation mechanism mid-slew). Grid-searched.
+gamma0 = 0.3
+gamma1 = 0.05
+gamma2 = 0.01
+# Restart the xi envelope at the start of each waypoint slew (see controller.py).
+xi_reset_on_maneuver = true
+# Boundary layer replacing sign(eta) in the dynamic control law (prevents chatter).
+eta_boundary_layer = 0.05
+# Low-pass coefficient for the d(we_u)/dt finite difference.
+dwe_u_filter_coef = 0.8
+# Guard for 1/e4 terms in kappa2 when e4 -> 0.
+e4_eps = 0.01
+# Clamp on the unbounded 1/xi^2 kinematic gains kappa1/kappa2. Sized so the e_d excitation
+# u_k ~ kappa*xi stays within what the wheels can slew (J^-1 * u_max ~ 0.1 rad/s^2).
+kappa_max = 2.0
+# Control-torque saturation (paper actuator limit u_m = 0.01 N.m).
+u_max = 1.0
+
 [observer]
-enable = true
-feedback_en = true
-t_sample = 0.01
+enable = false
+feedback_en = false
+t_sample = 0.1
 gain = [ 3.00, 0.005, 0.000 ]
 
 [wheels]
@@ -60,6 +101,7 @@ use_inertia = false
 mag_moment_max = 50 # Am2
 t_sample = 1
 enable = false
+mode = "momentum_dump_xyz"
 
 [faults]
 master_enable = true
@@ -82,22 +124,29 @@ time = 100
 master_enable = false
 
 [satellite]
-mode="ref_pointing"
+mode="tracking"
 euler_init_en = true
-euler_init = [ 0, 2, 0,]
+euler_init = [ 0, 0, 0,]
 q_init = [ 0, 0, 0, 1,]
-use_ref_euler = true
+use_ref_euler = false
 ref_euler = [ 0, 0, 0,]
 use_ref_q = false
 ref_q = [ 0.12707253, -0.17409001,  0.12707253,  0.96819307]
-use_ref_series = false
-ref_q_series = [[ 0.12707253, -0.17409001,  0.12707253,  0.96819307], [ 0.0, 0.0, 0.0, 1.0 ]]
-ref_t_series=[ 0, 30,]
+use_ref_series = true
+# ref_q_series = [[ 0.0, 0.0, 0.0, 1.0 ], [ 0.12707253, -0.17409001,  0.12707253,  0.96819307], [ 0.0, 0.0, 0.0, 1.0 ], [ 0.12707253, -0.17409001,  0.12707253,  0.96819307], [ 0.0, 0.0, 0.0, 1.0 ]]
+ref_q_series = [[ 0.0, 0.0, 0.0, 1.0 ], [ 0.0, 0.0, 0.1305, 0.9914,], [ 0.0, 0.0, 0.0, 1.0 ]]
+ref_t_series=[ 0, 150, 300 ]
+sinusoidal_ref_amplitude_deg = [ 45, 45, 0,]
+sinusoidal_ref_frequency = [ 0.05, 0.05, 0.0,]
 w_init_dps = [ 0, 0, 0,]
 wheels_control_enable = true
 mass = 12
 M_Inertia = [ [ 0.919, -0.023, -0.020], [ -0.023, 0.916, 0.009], [ -0.020, 0.009, 0.444] ]
 inertia_override = true
+# Sinusoidal parametric uncertainty: Delta J = frac * diag(J) .* sin(freq*t).
+# Must be < 1 (the old hard-coded [2, 2.8, 3.6] kg.m2 made this plant's inertia negative).
+delta_inertia_frac = 0.1
+delta_inertia_freq = [ 0.1, 0.2, 0.3 ]
 
 [orbit]
 altitude_km = 500 # km
@@ -132,7 +181,7 @@ inst_count_threshold = 5
 
 [FDIR.satellite]
 enable = false
-w_max_dps = 10
+w_max_dps = 600
 
 [output.visualizer]
 enable = false

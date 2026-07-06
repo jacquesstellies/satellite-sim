@@ -92,6 +92,8 @@ class Satellite(Body):
             self.calc_M_inertia_inv()
         else:
             self.calc_M_inertia()
+        self.delta_inertia_frac = config['satellite'].get('delta_inertia_frac', 0.0)
+        self.delta_inertia_freq = np.array(config['satellite'].get('delta_inertia_freq', [0.1, 0.2, 0.3]))
         self.disturbances = Disturbances(self.orbit, config)
         self.calc_face_properties()
         self.wheels_control_enable = config['satellite']['wheels_control_enable']
@@ -351,7 +353,14 @@ class Satellite(Body):
         return rots[i] * Rotation.from_rotvec(s * rel)
 
     def calc_delta_M_inertia(self, t):
-        return np.diag(np.array([2*np.sin(0.1*t), 2.8*np.sin(0.2*t), 3.6*np.sin(0.3*t)]))
+        # Sinusoidal parametric uncertainty Delta J = frac * diag(J) .* sin(freq*t), applied
+        # per axis. frac is set from the config so it scales with the plant: the old hard-coded
+        # amplitudes [2, 2.8, 3.6] (= 0.8 * diag(J) of the Nadafi plant) drove the effective
+        # inertia negative on smaller satellites (e.g. Zarourati's J = diag(0.92, 0.92, 0.44)),
+        # which makes the plant unconditionally unstable. frac must stay < 1.
+        if self.delta_inertia_frac == 0.0:
+            return np.zeros((3,3))
+        return self.delta_inertia_frac * np.diag(np.diag(self.M_inertia) * np.sin(self.delta_inertia_freq * t))
 
     wheels_control_enable = True
     T_ctr_vec = None

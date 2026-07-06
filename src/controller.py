@@ -274,6 +274,17 @@ class ZarouratiController:
     t0 = None              # time origin: set to t when UATC first activates
     dwe_u_filtered = 0.0   # low-pass filtered finite-difference of we_u
 
+    xi = 0.0
+    eta = np.asmatrix(np.zeros(2)).T
+    u_k = np.asmatrix(np.zeros(2)).T
+    kappa1 = np.asmatrix(np.zeros(2)).T
+    kappa2 = np.asmatrix(np.zeros(2)).T
+    f_idx = 1
+    e_d = np.asmatrix(np.zeros(2)).T
+
+    nf_idx = np.array([0, 2]) # actuated wheel indices
+    f_idx = 1 # unactuated wheel index
+
     def __init__(self, config):
         self.config = config
         self.h = 0.1
@@ -303,9 +314,21 @@ class ZarouratiController:
         self.kappa_max = z.get('kappa_max', 5.0)
         # Control-torque clip; the paper's actuator limit u_m = 0.01 N.m, not the wheel max_torque.
         self.u_max = z.get('u_max', self.config['wheels']['max_torque'])
+        # Restart the prescribed-performance envelope (tau = 0 -> xi = gamma0 + gamma2) at the
+        # start of each reference slew (rising edge of |w_ref|). The paper's timeline (Fig. 6)
+        # keys xi to UATC activation for *a* maneuver phase; for a repeating waypoint series the
+        # envelope must re-inflate per maneuver, otherwise xi sits at its floor when a later slew
+        # arrives, kappa1 = (1/xi^2)(...) pegs at the clamp and the unactuated feedback degrades.
+        self.xi_reset_on_maneuver = z.get('xi_reset_on_maneuver', False)
+        self._w_ref_norm_prev = 0.0
+
+        # Reduced representation indices for #RW2 failure (Actuated: 1, 3)
+        self.nf_idx = np.array([0, 2]) # actuated wheel indices
+        self.f_idx = 1 # unactuated wheel index
 
         if self.t0 is None:
             self.t0 = 0
+
     def calc_output(self, q_err, w, u_wheels_prev, t):
 
             """
@@ -320,36 +343,34 @@ class ZarouratiController:
             k_d = self.k_d
             k_phi = self.k_phi
             # Parameters for auxiliary variable xi
-            gamma0, gamma1, gamma2 = (self.gamma0, self.gamma1, self.gamma2)
-
-            # Reduced representation indices for #RW2 failure (Actuated: 1, 3)
-            actuated_idx = np.array([0, 2]) 
-            unactuated_idx = 1
             
             # Skew-symmetric helper matrix G1
             G1 = np.array([[0, -1], [1, 0]])
 
             # 1. Extract transformed error states
             q_ev = np.array([q_err.x, q_err.y, q_err.z])
-            e_u = q_ev[unactuated_idx]
-            e_a = col_vec(np.array(q_ev[actuated_idx]))
+            e_u = q_ev[self.f_idx]
+            e_a = col_vec(np.array(q_ev[self.nf_idx]))
             e4 = q_err.w
             
-            w_d = col_vec(np.zeros(3)) # desired angular velocity
-            w_d_r = col_vec(np.array([w_d[actuated_idx[0]], w_d[actuated_idx[1]]]))
-            dw_d = col_vec(np.zeros(3))
-            dw_d_r = col_vec(np.array([dw_d[actuated_idx[0]], dw_d[actuated_idx[1]]]))
+            w_d = col_vec(self.satellite.w_ref)
+            w_d_r = col_vec(np.array([w_d[self.nf_idx[0]], w_d[self.nf_idx[1]]]))
+            dw_d = col_vec(self.satellite.dw_ref)
+            dw_d_r = col_vec(np.array([dw_d[self.nf_idx[0]], dw_d[self.nf_idx[1]]]))
 
-            A = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-            A_r = A[np.ix_(actuated_idx, actuated_idx)]
+            # Paper Eq. (11c): A(q_e) = (e4^2 - e_v.e_v)I + 2 e_v e_v^T - 2 e4 S(e_v) maps the
+            # desired frame into the body frame (w_e = w - A w_d). scipy's as_matrix() returns
+            # the transpose of that (active rotation, body -> desired), hence the .T.
+            A = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix().T
+            A_r = A[np.ix_(self.nf_idx, self.nf_idx)]
             w = col_vec(w)
             we = w - A@w_d
-            we_u = we[unactuated_idx]
-            we_a = we[actuated_idx]
+            we_u = we[self.f_idx]
+            we_a = we[self.nf_idx]
             assert(we_a.shape == (2,1))
 
             
-            B = e4 * we_u + q_err.x * w_d[2] - q_err.z * w_d[0] # @TODO generalize for any unactuated_idx
+            B = e4 * we_u + q_err.x * w_d[2] - q_err.z * w_d[0] # @TODO generalize for any self.f_idx
             de_u = 0.5 * (B + e_a.T @ G1 @ we_a)
 
             G2 = np.array([[e4, e_u], [-e_u, e4]])
@@ -358,86 +379,126 @@ class ZarouratiController:
             assert(de_a.shape == (2,1))
             de4 = -0.5 * (e_u * we_u + e_a.T @ we_a)
             de4 = de4[0, 0]
-
-            xi = gamma0 * np.exp(-gamma1 * t) + gamma2
-            dxi = gamma0 * (-gamma1 * np.exp(-gamma1 * t))
-            ddxi = gamma0 * gamma1**2 * np.exp(-gamma1 * t)
             
+            # xi is keyed to time-since-activation (tau), not absolute sim time, so it does not
+            # depend on when in the mission UATC engages (paper: UATC starts at t_dd + T_r).
+            # Optionally re-key tau to the start of each reference slew (see __init__); e_d's
+            # norm is re-inflated to the new xi automatically by the renormalisation below.
+            if self.xi_reset_on_maneuver:
+                w_ref_norm = float(np.linalg.norm(self.satellite.w_ref))
+                if w_ref_norm > 1e-3 and self._w_ref_norm_prev <= 1e-3 and (t - self.t0) > 1.0:
+                    self.t0 = t
+                self._w_ref_norm_prev = w_ref_norm
+            tau = t - self.t0
+            self.xi = self.gamma0 * np.exp(-self.gamma1 * tau) + self.gamma2
+            dxi = self.gamma0 * (-self.gamma1 * np.exp(-self.gamma1 * tau))
+            ddxi = self.gamma0 * self.gamma1**2 * np.exp(-self.gamma1 * tau)
+            
+
+            # ω̇_eu from the error dynamics Eq. (12), not a finite difference (which is noisy and
+            # gets amplified by the 1/xi^2 factor inside dkappa1). The unknown disturbance d is
+            # omitted here -- the adaptive phi_hat term (Eq. 29) compensates for its bounded effect.
+            # Eq. (12): ω̇_e = J^-1 (-S(ω)H + C u) + S(ω_e) A ω_d - A ω̇_d, where H = Jω + C h_w is
+            # the total angular momentum and the body control torque C u = -D @ u_wheels (wheel
+            # reaction) is taken from the previous control step (same approach as the Nadafi path).
+            J_inv = np.array(self.satellite.M_inertia_inv)
+            H_total = J0 @ w + col_vec(self.satellite.wheel_module.H_vec)
+            S_w = np.array([[0, -w[2,0], w[1,0]], [w[2,0], 0, -w[0,0]], [-w[1,0], w[0,0], 0]])
+            S_we = np.array([[0, -we[2,0], we[1,0]], [we[2,0], 0, -we[0,0]], [-we[1,0], we[0,0], 0]])
+            Cu = -self.satellite.wheel_module.D @ col_vec(u_wheels_prev)
+            dwe = J_inv @ (-S_w @ H_total + Cu) + S_we @ A @ w_d - A @ dw_d
+            self.dwe_u = dwe[self.f_idx, 0]
             # ω̇_eu via finite difference
-            dwe_u = float(we_u - self.we_u) / self.t_sample
-            self.we_u = we_u
+            # self.dwe_u = float(we_u - self.we_u) / self.t_sample
+            # self.we_u = we_u
             # J_inv = self.satellite.M_inertia_inv
             # dwe = - J_inv @ my_utils.skew_symmetric(w)@satellite.H + my_utils.skew_symmetric(we) @ A @ w_d - J_inv @ A @ dw_d + J_inv @ satellite.wheel_module.D @ we # how to calculate disturbance?
-            # dwe_u = dwe[unactuated_idx, 0]
+            # dwe_u = dwe[self.f_idx, 0]
             
-            # 2. Kinematic Controller terms
-            kappa1 = (1.0 / xi**2) * (k_u * e_u + e4 * we_u)
-            kappa2 = (2.0 * dxi / (e4 * xi)) + k_a * e4 # Note: text has a typo in 26, using logic from 25
-            kappa1 = kappa1[0,0] # convert 1x1 numpy matrix to scalar
-            Gamma = 0.5 * (k_a * e4 * e_u + e4 * kappa1 + we_u)
-            Gamma = Gamma[0,0]
+            # e4_safe keeps the 1/(e4*xi) and 1/e4^2 terms of kappa2 finite when the scalar
+            # quaternion component passes through zero (180 deg error).
+            e4_safe = e4 if abs(e4) > self.e4_eps else my_utils._sign(e4) * self.e4_eps
+            self.kappa1 = (1.0 / self.xi**2) * (k_u * e_u + e4 * we_u)
+            self.kappa2 = (2.0 * dxi / (e4_safe * self.xi)) + k_a * e4 # Note: text has a typo in 26, using logic from 25
+            self.kappa1 = self.kappa1[0,0] # convert 1x1 numpy matrix to scalar
 
-            dkappa1 = 1/xi**2 * (k_u * de_u + de4 * we_u + e4 * dwe_u) - 2*dxi/xi**3 * (k_u * e_u + e4 * we_u)
-            dkappa2 = 2 / (e4**2 * xi ** 2) * (e4 * xi * ddxi - de4 * xi * dxi - e4 * dxi**2) + k_a * de4
+            dkappa1 = 1/self.xi**2 * (k_u * de_u + de4 * we_u + e4 * self.dwe_u) - 2*dxi/self.xi**3 * (k_u * e_u + e4 * we_u)
+            dkappa2 = 2 / (e4_safe**2 * self.xi ** 2) * (e4 * self.xi * ddxi - de4 * self.xi * dxi - e4 * dxi**2) + k_a * de4
             dkappa1 = dkappa1[0,0]
 
-            # Assuming e_d follows the oscillator-like eq (24)
-            # Simplified for instant computation as a vector with norm xi
+            # The 1/xi^2 (and 1/xi^3) factors make kappa1/kappa2 an unbounded gain: the continuous
+            # Lyapunov proof tolerates this (it relies on e_u, omega_eu -> 0), but in discrete time
+            # the kappa1 -> Gamma path amplifies any residual omega_eu (~ e4^2/xi^2) and spins the
+            # e_d oscillator, which re-excites omega_eu (positive feedback) once e_u is small.
+            # Clamping keeps the law identical when errors are small relative to xi^2, and only
+            # caps the transient that would otherwise diverge.
+            km = self.kappa_max
+            self.kappa1 = float(np.clip(self.kappa1, -km, km))
+            self.kappa2 = float(np.clip(self.kappa2, -km, km))
+            dkappa1 = float(np.clip(dkappa1, -km / self.t_sample, km / self.t_sample))
+            dkappa2 = float(np.clip(dkappa2, -km / self.t_sample, km / self.t_sample))
+
+
+            Gamma = 0.5 * (k_a * e4 * e_u + e4 * self.kappa1 + we_u)
+            Gamma = Gamma[0,0]
+            # Auxiliary converge vector e_d follows the oscillator-like Eq. (24):
+            # de_d = (dxi/xi) e_d + Lambda*G1 e_d, with ||e_d(0)|| = xi(0) = gamma0 + gamma2.
             if self.init is True:
-                self.e_d_prev = col_vec(np.array([np.sqrt(gamma0 + gamma2), np.sqrt(gamma0 + gamma2)]))  # ||e_d(0)|| = xi satisfies Eq. (24)
+                xi0 = self.gamma0 + self.gamma2
+                self.e_d = col_vec(np.array([xi0 / np.sqrt(2.0), xi0 / np.sqrt(2.0)]))
                 self.init = False
-            # E = np.array([[0, 1], [-1, 0]])
-            de_d = (dxi/xi)*self.e_d_prev + Gamma * G1 @ self.e_d_prev
+            de_d = (dxi/self.xi)*self.e_d + Gamma * G1 @ self.e_d
 
             assert(de_d.shape == (2,1))
-            e_d = self.e_d_prev + de_d * self.t_sample
-            assert(e_d.shape == (2,1))
-            e_d_norm = np.linalg.norm(e_d)
-            if np.abs(e_d_norm - xi) > 1e-6:
-                e_d = (e_d / e_d_norm) * xi
-            self.e_d_prev = e_d
-            
+            self.e_d = self.e_d + de_d * self.t_sample
+            assert(self.e_d.shape == (2,1))
+            e_d_norm = np.linalg.norm(self.e_d)
+            if np.abs(e_d_norm - self.xi) > 1e-6:
+                self.e_d = (self.e_d / e_d_norm) * self.xi
+
             # Virtual control input uk 
-            u_k = -k_a * e4 * e_a + kappa1 * (G1 @ e_d) + kappa2 * e_d
-            assert(u_k.shape == (2,1))
-            du_k = -k_a * de4 * e_a - k_a * e4 * de_a + (dkappa1 * G1 @ e_d + dkappa2 * e_d) + (kappa1 * G1 @ de_d + kappa2 * de_d)
+            self.u_k = -k_a * e4 * e_a + self.kappa1 * (G1 @ self.e_d) + self.kappa2 * self.e_d
+            assert(self.u_k.shape == (2,1))
+            du_k = -k_a * de4 * e_a - k_a * e4 * de_a + (dkappa1 * G1 @ self.e_d + dkappa2 * self.e_d) + (self.kappa1 * G1 @ de_d + self.kappa2 * de_d)
             
             assert(du_k.shape == (2, 1))
             
             # 3. Dynamic error eta
-            eta = u_k - we_a
+            self.eta = self.u_k - we_a
             
             # 4. Reduced Static and Dynamic components
-            J_r = J0[np.ix_(actuated_idx, actuated_idx)] # J^r (Reduced inertia matrix)
-            Sw = np.array([[0, -w[2,0], w[1,0]], [w[2,0], 0, -w[0,0]], [-w[1,0], w[0,0], 0]])
-            Sw_r = Sw[np.ix_(actuated_idx, actuated_idx)]
+            J_r = J0[np.ix_(self.nf_idx, self.nf_idx)] # J^r (Reduced inertia matrix)
+            Sw_r = S_w[np.ix_(self.nf_idx, self.nf_idx)]   # S^r(w)   -> S^r(w)H^r term
+            Swe_r = S_we[np.ix_(self.nf_idx, self.nf_idx)] # S^r(w_e) -> -J^r S^r(w_e) A^r w_d^r term
             assert(Sw_r.shape == (2,2))
 
-            Swe_r = Sw_r
-
             H = self.satellite.M_inertia @ w + col_vec(self.satellite.wheel_module.H_vec)
-            H_r = H[actuated_idx]
+            H_r = H[self.nf_idx]
             assert(H_r.shape == (2,1))
-            C_r = self.satellite.wheel_module.D[np.ix_(actuated_idx, actuated_idx)]
+            C_r = self.satellite.wheel_module.D[np.ix_(self.nf_idx, self.nf_idx)]
         
-            e_a_tilde = e_d - e_a
+            e_a_tilde = self.e_d - e_a
             assert(e_a_tilde.shape == (2,1))
             
             # 5. Adaptive update law for phi_hat (Eq. 29)
-            phi_hat_dot = (k_phi / k_d) * (np.cosh(self.phi_hat)**2) * float(np.linalg.norm(eta))
-            self.phi_hat = self.phi_hat + phi_hat_dot * self.t_sample
+            # Clip before cosh to prevent overflow: tanh(phi_hat) saturates at ~|phi_hat|>20,
+            # so any cap above that is mathematically equivalent for the control law and Lyapunov proof.
+            phi_hat_clamped = np.clip(self.phi_hat, -50.0, 50.0)
+            phi_hat_dot = (k_phi / k_d) * (np.cosh(phi_hat_clamped)**2) * float(np.linalg.norm(self.eta))
+            self.phi_hat = np.clip(self.phi_hat + phi_hat_dot * self.t_sample, -50.0, 50.0)
 
             # 6. Final Control Law uc^r
-            u_c_r = C_r.T @ (Swe_r @ H_r - J_r @ Sw_r @ A_r @ w_d_r + J_r @ A_r @ dw_d_r + J_r @ du_k + k_w * np.tanh(eta)\
-                           + 0.5 * G1 @ e_a * e_u + 0.5 * e_a_tilde + k_d * np.sign(eta) * np.tanh(self.phi_hat))
+            # The paper's k_d*sign(eta) is implemented with a boundary layer (tanh(eta/eta_bl))
+            # to avoid bang-bang chattering at the sample rate.
+            u_c_r = C_r.T @ (Sw_r @ H_r - J_r @ Swe_r @ A_r @ w_d_r + J_r @ A_r @ dw_d_r + J_r @ du_k + k_w * np.tanh(self.eta)\
+                           + 0.5 * G1 @ e_a * e_u + 0.5 * e_a_tilde + k_d * np.tanh(self.eta / self.eta_bl) * np.tanh(self.phi_hat))
 
-            u_max = self.config['wheels']['max_torque']
-            u_c_r = -1 * np.clip(np.asarray(u_c_r), -u_max, u_max)
+            u_c_r = -1 * np.clip(np.asarray(u_c_r), -self.u_max, self.u_max)
 
             h_w = np.zeros(3)
-            h_w[actuated_idx[0]] = u_c_r[0, 0]
-            h_w[actuated_idx[1]] = u_c_r[1, 0]
-            h_w[unactuated_idx] = 0 # No control input for actuated axes in this formulation
+            h_w[self.nf_idx[0]] = u_c_r[0, 0]
+            h_w[self.nf_idx[1]] = u_c_r[1, 0]
+            h_w[self.f_idx] = 0 # No control input for actuated axes in this formulation
             return h_w
             
 

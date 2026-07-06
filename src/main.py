@@ -886,6 +886,15 @@ def main():
                         rows_2.append(('chi_0', my_utils.xyz_axes, 'chi_0 (rad/s)'))
                         rows_2.append(('chi_1', my_utils.xyz_axes, 'chi_1 (Nm   )'))
                         rows_2.append(('mu', my_utils.xyz_axes, 'mu (rad/s)'))
+                    if controller.sub_type.startswith("Zarourati"):
+                        rows_2.append(('xi', ['none'], 'xi (unitless)'))
+                        rows_2.append(('eta_norm', ['none'], 'eta norm (unitless)'))
+                        rows_2.append(('kappa1', ['none'], 'kappa1 (unitless)'))
+                        rows_2.append(('kappa2', ['none'], 'kappa2 (unitless)'))
+                        rows_2.append(('we_u', ['none'], 'we_u (unitless)'))
+                        rows_2.append(('dwe_u', ['none'], 'dwe_u (unitless)'))
+                        rows_2.append(('eta', my_utils.xyz_axes, 'eta (unitless)'))
+                        rows_2.append(('phi_hat', ['none'], 'phi_hat (unitless)'))
 
 
                 simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)

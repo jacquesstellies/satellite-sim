@@ -80,14 +80,14 @@ class Logger:
                     self.results_data[f'mu_{axis}'] = []
             if self.config['controller']['sub_type'] == 'Zarourati':
                 self.results_data['xi'] = []
+                self.results_data[f'kappa1'] = []
+                self.results_data[f'kappa2'] = []
+                self.results_data[f'eta_norm'] = []
+                self.results_data[f'dwe_u'] = []
+                self.results_data[f'we_u'] = []
+                self.results_data[f'phi_hat'] = []
                 for axis in my_utils.xyz_axes:
-                    self.results_data[f'kappa1_{axis}'] = []
-                    self.results_data[f'kappa2_{axis}'] = []
                     self.results_data[f'eta_{axis}'] = []
-                    self.results_data[f'eta_norm'] = []
-                    self.results_data[f'dwe_u'] = []
-                    self.results_data[f'we_u'] = []
-                    self.results_data[f'']
                 
                         
         self.next_timestamp = self.satellite.controller.t_sample
@@ -158,7 +158,21 @@ class Logger:
                                 self.results_data['mu_' + axis].append(np.nan)
                             else:
                                 self.results_data['mu_' + axis].append(self.satellite.controller.nadafi_controller.mu[i,0])
-
+                    if self.config['controller']['sub_type'] == 'Zarourati':
+                        self.results_data['xi'].append(self.satellite.controller.zarourati_controller.xi)
+                        self.results_data['eta_norm'].append(np.linalg.norm(self.satellite.controller.zarourati_controller.eta))
+                        self.results_data['kappa1'].append(self.satellite.controller.zarourati_controller.kappa1)
+                        self.results_data['kappa2'].append(self.satellite.controller.zarourati_controller.kappa2)
+                        self.results_data['we_u'].append(self.satellite.controller.zarourati_controller.we_u)
+                        self.results_data['dwe_u'].append(self.satellite.controller.zarourati_controller.dwe_u)
+                        self.results_data['phi_hat'].append(self.satellite.controller.zarourati_controller.phi_hat)
+                        idx = 0
+                        for i, axis in enumerate(my_utils.xyz_axes):
+                            if i == self.satellite.controller.zarourati_controller.f_idx:
+                                self.results_data[f'eta_{axis}'].append(np.nan)
+                            else:
+                                self.results_data[f'eta_{axis}'].append(self.satellite.controller.zarourati_controller.eta[idx, 0])
+                                idx += 1
 
                 # self.results_data['control_adaptive_model_output'] = self.satellite.controller.control_adaptive_model_output
                 # for i, axis in enumerate(my_utils.xyz_axes):
