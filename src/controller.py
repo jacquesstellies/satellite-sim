@@ -44,6 +44,7 @@ class NadafiController:
     chi_1 = np.asmatrix(np.zeros(2)).T
     v_0 = np.asmatrix(np.zeros(2)).T
     mu = np.asmatrix(np.ones(2)*0.3).T
+    mu_eps = 1e-2  # regularizes the 1/||mu||^2 term in the MFNDO mu-update (avoids blow-up as ||mu||->0)
     f_idx = 2 # fault index
 
     config = None
@@ -246,7 +247,7 @@ class NadafiController:
         temp_1 = Aq@(self.Z+phi)
         temp_2 = dphi@temp_1
 
-        temp_3 = (self.mu@self.Z.T)/np.linalg.norm(self.mu)**2
+        temp_3 = (self.mu@self.Z.T)/(np.linalg.norm(self.mu)**2 + self.mu_eps)
         temp_4 = my_utils.sat_delta_vec(self.mu)*self.alpha_1
 
         dmu = temp_3 @ \
