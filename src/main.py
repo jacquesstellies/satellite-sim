@@ -299,17 +299,22 @@ class Simulation:
                         self.results_data["q_sat_y"], 
                         self.results_data["q_sat_z"], 
                         self.results_data["q_sat_w"]])
-        r_sat =  Rotation.from_quat(quat=q_sat.T)
+        # q_sat columns hold the passive q_BI. scipy from_quat treats a quaternion as an
+        # ACTIVE rotation, so .inv() recovers the passive attitude matrix A(q_BI)=T_BI
+        # (v_B = T_BI v_I); its 3-2-1 Euler angles are the body attitude.
+        r_sat =  Rotation.from_quat(quat=q_sat.T).inv()
         [self.results_df['e321_sat_yaw'],self.results_df['e321_sat_pitch'], self.results_df['e321_sat_roll']] = r_sat.as_euler('zyx', degrees=True).T
 
         q_sat_ref = np.array([self.results_df["q_sat_ref_x"],
                               self.results_df["q_sat_ref_y"],
                               self.results_df["q_sat_ref_z"],
                               self.results_df["q_sat_ref_w"]])
-        r_sat_ref = Rotation.from_quat(q_sat_ref.T)
+        r_sat_ref = Rotation.from_quat(q_sat_ref.T).inv()  # passive: matrix T_RI
         # self.results_df['euler_axis_sat_ref'] = my_utils.conv_Rotation_obj_to_euler_axis_angle(r_sat_ref)
 
-        r_sat_error = r_sat_ref * r_sat.inv()
+        # Body-frame error (matrix T_BR); as_quat matches the controller's passive q_RB
+        # = my_utils.quat_error(q_RI, q_BI) exactly (verified).
+        r_sat_error = r_sat * r_sat_ref.inv()
 
         [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = r_sat_error.as_quat().T
         # [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = self.results_df.apply(lambda row: my_utils.get_quaternion_error_Nadafi(row, ), axis=1).T
@@ -355,7 +360,8 @@ class Simulation:
             self.steady_state = control_info['SteadyStateValue']
 
             q_final = [self.results_data[f'q_sat_{axis}'][-1] for axis in my_utils.q_axes]
-            q_error = self.satellite.q_ref*np.quaternion(q_final[3], q_final[0], q_final[1], q_final[2]).inverse()
+            q_BI_final = np.quaternion(q_final[3], q_final[0], q_final[1], q_final[2])
+            q_error = my_utils.quat_error(self.satellite.q_RI, q_BI_final)
             prin_error = my_utils.get_principal_angle_from_np_quaternion(q_error)
             self.settling_time = control_info['SettlingTime']
             

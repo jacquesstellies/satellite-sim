@@ -29,13 +29,13 @@ class Satellite(Body):
     orbit : Orbit = None
     logger = None
 
-    q_ref : np.quaternion = np.quaternion(1,0,0,0)
+    q_RI : np.quaternion = np.quaternion(1,0,0,0)
     ref_T = np.zeros(3)
-    q_ref_series : list = None
+    q_RI_series : list = None
     t_ref_series : list = None
     _tracking_keys_cache = None
-    w_ref = np.zeros(3)
-    dw_ref = np.zeros(3)
+    w_RI_R = np.zeros(3)
+    dw_RI_R = np.zeros(3)
     sinusoidal_ref_amplitude = np.zeros(3)
     sinusoidal_ref_frequency = np.zeros(3)
 
@@ -46,8 +46,8 @@ class Satellite(Body):
     mode: str = "init"
     modes: list[str] = ["init", "ref_pointing", "nominal_day", "nominal_night", "safe"]
 
-    q = np.quaternion(1,0,0,0)
-    w = np.zeros(3)
+    q_BI = np.quaternion(1,0,0,0)
+    w_BI_B = np.zeros(3)
     dw = np.zeros(3)
     H = np.zeros(3)
     H_total = np.zeros(3)
@@ -103,9 +103,9 @@ class Satellite(Body):
         self.T_ctr_wheels = np.zeros(self.wheel_module.num_wheels)
         self.T_ctr_vec = np.zeros(3)
         
-        self.w = np.array(config['satellite']['w_init_dps']) * my_utils.DEG_TO_RAD
-        assert len(self.w) == 3, "w_init_dps must be a 3 element array"
-        self.H = self.M_inertia@self.w
+        self.w_BI_B = np.array(config['satellite']['w_init_dps']) * my_utils.DEG_TO_RAD
+        assert len(self.w_BI_B) == 3, "w_init_dps must be a 3 element array"
+        self.H = self.M_inertia@self.w_BI_B
         self.H_total = self.H + self.wheel_module.H_vec
 
         self.E = np.eye(self.wheel_module.num_wheels)
@@ -124,26 +124,26 @@ class Satellite(Body):
         if self.mode == "ref_pointing":
             if config['satellite']['use_ref_euler']:
                 q_ref_array = Rotation.from_euler("xyz", config['satellite']['ref_euler'], degrees=True).as_quat()
-                self.q_ref = np.quaternion(q_ref_array[3], q_ref_array[0], q_ref_array[1], q_ref_array[2]) # check if valid quaternion
+                self.q_RI = np.quaternion(q_ref_array[3], q_ref_array[0], q_ref_array[1], q_ref_array[2]) # check if valid quaternion
             elif config['satellite']['use_ref_q']:
-                self.q_ref = np.quaternion(config['satellite']['ref_q'][3], config['satellite']['ref_q'][0], config['satellite']['ref_q'][1], config['satellite']['ref_q'][2]) # check if valid quaternion
-                # self.q_ref = Rotation.from_quat(config['satellite']['ref_q'])
+                self.q_RI = np.quaternion(config['satellite']['ref_q'][3], config['satellite']['ref_q'][0], config['satellite']['ref_q'][1], config['satellite']['ref_q'][2]) # check if valid quaternion
+                # self.q_RI = Rotation.from_quat(config['satellite']['ref_q'])
             elif config['satellite']['use_ref_series']:
                 t_ref_series = config['satellite']['ref_t_series']
                 q_series = config['satellite']['ref_q_series']
                 if len(t_ref_series) == len(q_series):
-                    self.q_ref = Rotation.from_quat(q_series[0]).as_quat()
-                    self.q_ref_series = []
-                    # self.q_ref_series = Rotation.from_quat(q_series)
+                    self.q_RI = Rotation.from_quat(q_series[0]).as_quat()
+                    self.q_RI_series = []
+                    # self.q_RI_series = Rotation.from_quat(q_series)
                     for i in range(len(t_ref_series)):
-                        self.q_ref_series.append(np.quaternion(q_series[i][3], q_series[i][0], q_series[i][1], q_series[i][2])) # check if valid quaternion
+                        self.q_RI_series.append(np.quaternion(q_series[i][3], q_series[i][0], q_series[i][1], q_series[i][2])) # check if valid quaternion
                     self.t_ref_series = t_ref_series
                 else:
                     raise(Exception("t_ref_series and ref_q_series must be the same length"))
             else:
                 raise(Exception("no reference angle commanded"))
         else:
-            self.q_ref = np.quaternion(1,0,0,0)
+            self.q_RI = np.quaternion(1,0,0,0)
         
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
@@ -236,7 +236,7 @@ class Satellite(Body):
             print("MODE SWITCH \t ", mode_prev, " -> ", self.mode)
 
     t_ref_update = 0
-    q_ref_series_index = 0
+    q_RI_series_index = 0
     init = True
     next_t_ref_update = 0.0
     next_t_ref_update_interval = None
@@ -248,43 +248,48 @@ class Satellite(Body):
         self.update_mode()
 
         if self.init and self.mode not in ("ref_pointing", "tracking"):
-            self.w_ref = np.zeros(3)
+            self.w_RI_R = np.zeros(3)
             self.init = False
             return
         if self.mode == "nominal_day":
             # nP = np.array([1,0,0]) # body frame x axis
-            # qBI_I = self.qBI
+            # qBI_I = self.q_BI
             # theta_BS = np.arccos(nP @ self.orbit.nSI_I)
             # nRS = np.cross(nSI_I, nP)
             #  = self.orbit.nSI_I*np.sin()
-            # qBI = self.q
+            # qBI = self.q_BI
 
+            # Reference (R) frame axes expressed in inertial (I): x=sun, z=nadir, y=z x x.
+            # Rows of a passive DCM T_RI are the R-axes in I coords (v_R = T_RI v_I).
             x_axis = self.orbit.nSB_I
             z_axis = self.orbit.nIB_I
             y_axis = my_utils.cross_product_M31M31(self.orbit.nIB_I, x_axis)
-            # q_ref_prev = self.q_ref
-            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(np.array([x_axis, y_axis, z_axis]).T))
-            # self.w_ref = 
-            # self.q_ref = Rotation.from_matrix(r_matrix).as_quat()
+            T_RI = np.row_stack([x_axis, y_axis, z_axis])
+            self.q_RI = my_utils.dcm_to_quat(T_RI)
+            self.w_RI_R = np.zeros(3)
+            self.dw_RI_R = np.zeros(3)
 
         if self.mode == "nominal_night":
-            self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_matrix(self.orbit.TOI))
+            # Nadir/LVLH pointing: reference frame R == orbit frame O, so T_RI = T_OI.
+            self.q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
+            # Orbital angular velocity w_OI is r x v / |r|^2 in inertial coords; the
+            # controller feedforward needs it resolved in the reference (orbit) frame.
             wOI_I = my_utils.cross_product_M31M31(self.orbit.sBI_I, self.orbit.DIsBI_I) / np.linalg.norm(self.orbit.sBI_I)**2
-            self.w_ref = wOI_I
-            # self.w_ref = self.orbit.TBO_B, -self.orbit.v_norm*self.orbit.radius
+            self.w_RI_R = self.orbit.T_OI @ wOI_I
+            self.dw_RI_R = np.zeros(3)
 
         if self.mode == "ref_pointing":
             if self.init == True:
                 self.init = False
             if self.config['satellite']['use_ref_series'] is False:
                 return
-            if self.q_ref_series_index > len(self.t_ref_series)-1:
+            if self.q_RI_series_index > len(self.t_ref_series)-1:
                 return
-            if t >= self.t_ref_series[self.q_ref_series_index]:
-                # print("updating ref q, t=", t, " next t=", self.t_ref_series[self.q_ref_series_index+1], " index=", self.q_ref_series_index)
-                self.q_ref = self.q_ref_series[self.q_ref_series_index]
-                self.q_ref_series_index += 1
-                print("new ref q=", print(self.q_ref), " at t=", t)
+            if t >= self.t_ref_series[self.q_RI_series_index]:
+                # print("updating ref q, t=", t, " next t=", self.t_ref_series[self.q_RI_series_index+1], " index=", self.q_RI_series_index)
+                self.q_RI = self.q_RI_series[self.q_RI_series_index]
+                self.q_RI_series_index += 1
+                print("new ref q=", print(self.q_RI), " at t=", t)
         
         if self.mode == "sinusoidal":
             # freq = self.sinusoidal_ref_frequency
@@ -302,9 +307,9 @@ class Satellite(Body):
             # R0 = _R_ref_at(t)
             # R_fwd = (R0.inv() * _R_ref_at(t + dt)).as_rotvec() / dt
             # R_bwd = (_R_ref_at(t - dt).inv() * R0).as_rotvec() / dt
-            # self.q_ref = my_utils.conv_Rotation_obj_to_numpy_q(R0)
-            # self.w_ref = 0.5 * (R_fwd + R_bwd)
-            # self.dw_ref = (R_fwd - R_bwd) / dt
+            # self.q_RI = my_utils.conv_Rotation_obj_to_numpy_q(R0)
+            # self.w_RI_R = 0.5 * (R_fwd + R_bwd)
+            # self.dw_RI_R = (R_fwd - R_bwd) / dt
 
             freq = self.sinusoidal_ref_frequency
             amp  = self.sinusoidal_ref_amplitude          # radians (see __init__)
@@ -318,9 +323,9 @@ class Satellite(Body):
             cdd = -freq[0]**2   * np.sin(freq[0] * t)
             axis = np.array([amp[0], amp[1], 0.0])         # direction = axis, magnitude = angle amplitude
 
-            self.q_ref  = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_rotvec(axis * s))
-            self.w_ref  = axis * c                          # exact body rate, z-component = 0
-            self.dw_ref = axis * cdd                        # exact angular acceleration
+            self.q_RI  = my_utils.conv_Rotation_obj_to_numpy_q(Rotation.from_rotvec(axis * s))
+            self.w_RI_R  = axis * c                          # exact body rate, z-component = 0
+            self.dw_RI_R = axis * cdd                        # exact angular acceleration
 
         if self.mode == "tracking":
             # Zarourati-style snapshot-imaging maneuver: smoothly slew (SLERP with
@@ -333,9 +338,9 @@ class Satellite(Body):
             R0 = self._tracking_q_ref_at(t)
             R_fwd = (R0.inv() * self._tracking_q_ref_at(t + dt)).as_rotvec() / dt
             R_bwd = (self._tracking_q_ref_at(t - dt).inv() * R0).as_rotvec() / dt
-            self.q_ref  = my_utils.conv_Rotation_obj_to_numpy_q(R0)
-            self.w_ref  = 0.5 * (R_fwd + R_bwd)
-            self.dw_ref = (R_fwd - R_bwd) / dt
+            self.q_RI  = my_utils.conv_Rotation_obj_to_numpy_q(R0)
+            self.w_RI_R  = 0.5 * (R_fwd + R_bwd)
+            self.dw_RI_R = (R_fwd - R_bwd) / dt
 
     def _tracking_keys(self):
         if self._tracking_keys_cache is None:
@@ -376,10 +381,11 @@ class Satellite(Body):
     f_wheels = None
     def calc_state_rates(self, t, y):
 
-        self.w = np.array(y[:3])
-        self.q = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
+        self.w_BI_B = np.array(y[:3])
+        self.q_BI = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
         w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
-        dcm = Rotation.from_quat([self.q.x, self.q.y, self.q.z, self.q.w]).as_matrix()
+        # Passive body DCM T_BI: v_B = T_BI @ v_I  (used by the disturbance models).
+        T_BI = my_utils.quat_to_dcm(self.q_BI)
 
         self.update_ref_q(t)
         ### Calculate controller output
@@ -389,12 +395,13 @@ class Satellite(Body):
             else:
                 f_est = np.zeros(3)
 
-            self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, self.q, self.w, self.q_ref, self, w_wheels_input, f_est)
+            self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, self.q_BI, self.w_BI_B, self.q_RI, self, w_wheels_input, f_est)
 
-        q_sat_err =  self.q_ref * self.q.inverse()
-        q_err_vec = np.array([q_sat_err.x, q_sat_err.y, q_sat_err.z])
+        # Body-frame attitude error q_RB (rotation B->R); vector part resolved in B.
+        q_RB =  my_utils.quat_error(self.q_RI, self.q_BI)
+        qv_RB = np.array([q_RB.x, q_RB.y, q_RB.z])
         
-        self.magt_module.calc_torque(q_err_vec, self.w, self.H + self.wheel_module.H_vec, t)
+        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t)
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
         if self.observer_module.enable is True:
@@ -407,7 +414,7 @@ class Satellite(Body):
 
         self.orbit.calc_orbit_state(t)
 
-        self.T_dist = self.disturbances.calc_torque(self, dcm, t)
+        self.T_dist = self.disturbances.calc_torque(self, T_BI, t)
         
         delta_M_inertia = self.calc_delta_M_inertia(t)
         M_inertia_effective = self.M_inertia + delta_M_inertia
@@ -415,16 +422,17 @@ class Satellite(Body):
 
         # M_inertia_effective_inv = self.M_inertia_inv
 
-        self.H = self.M_inertia@(self.w)
+        self.H = self.M_inertia@(self.w_BI_B)
         self.H_total = self.H + self.wheel_module.H_vec
-        self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w,self.H_total) + self.magt_module.T)
+        self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w_BI_B,self.H_total) + self.magt_module.T)
 
         #### Calculate the new satellite body state rates
-        inertial_w_q = np.quaternion(0, self.w[0], self.w[1], self.w[2]) # put the inertial velocity in q form
+        # Kinematics dq_BI = 0.5 * q_BI (x) w_BI_B  (Hamilton, body-frame rate).
+        w_BI_B_quat = np.quaternion(0, self.w_BI_B[0], self.w_BI_B[1], self.w_BI_B[2])
 
-        dq = 0.5*self.q*inertial_w_q
+        dq = 0.5*self.q_BI*w_BI_B_quat
         dq = [dq.x, dq.y, dq.z, dq.w]
-        control_power = abs(self.wheel_module.dH_vec * self.w) ## @TODO fix this
+        control_power = abs(self.wheel_module.dH_vec * self.w_BI_B) ## @TODO fix this
         
         self.fault_module.update(t)
         self.update_FDIR(t)
@@ -438,8 +446,8 @@ class Satellite(Body):
         # print("angular")
         if not self.config['FDIR']['satellite']['enable']:
             return
-        if my_utils.magnitude(self.w) > self.fd_w_max:
-            raise DivergentRate(f"Divergent rate detected, w_sat = {self.w*my_utils.RAD_TO_DEG} at time {t}")
+        if my_utils.magnitude(self.w_BI_B) > self.fd_w_max:
+            raise DivergentRate(f"Divergent rate detected, w_sat = {self.w_BI_B*my_utils.RAD_TO_DEG} at time {t}")
         
     def update_FDIR(self, t):
 
@@ -449,7 +457,7 @@ class Satellite(Body):
             wheel.update_fd(t)
 
         if self.fault_detector is not None:
-            self.fault_detector.update(t, self.w, self.T_ctr_wheels,
+            self.fault_detector.update(t, self.w_BI_B, self.T_ctr_wheels,
                                        self.wheel_module.H_vec, self.magt_module.T,
                                        T_dist=self.T_dist)
             if self.fault_detector.latched_wheel >= 0 and not self.fault_detector.reconfigured:

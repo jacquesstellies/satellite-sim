@@ -179,6 +179,37 @@ def conv_quat_to_dcm_nadafi(q : np.quaternion):
     return (q0**2 - np.linalg.norm(q_vec)**2)*np.eye(3) + 2*np.outer(q_vec, q_vec) - 2*q0*skew_symmetric(q_vec)
     # C = (q0**2 - np.linalg.norm(q_vec))*np.eye(3) +  - 2*q0*skew_symmetric(q_vec)
 
+# ---------------------------------------------------------------------------
+# Hamilton passive-rotation convention (single source of truth)
+#
+# Passive DCM T_BA maps coordinates:  v_B = T_BA @ v_A.
+# A passive quaternion q_BA (rotation A->B) has attitude matrix
+#     A(q) = (q0^2 - |q_v|^2) I + 2 q_v q_v^T - 2 q0 [q_v]_x      (minus sign)
+# which equals Rotation.from_quat([x,y,z,w]).as_matrix().T (scipy is active).
+# A(.) is an ANTI-homomorphism under the Hamilton product: A(p*q) = A(q) A(p),
+# so passive composition reverses relative to DCMs. See quat_error for the
+# verified order. Verified in scripts/verify_hamilton_passive.py.
+# ---------------------------------------------------------------------------
+def quat_to_dcm(q : np.quaternion) -> np.array:
+    """Passive attitude matrix A(q_BA): v_B = quat_to_dcm(q_BA) @ v_A."""
+    q0 = q.w
+    q_vec = np.array([q.x, q.y, q.z])
+    return (q0**2 - q_vec@q_vec)*np.eye(3) + 2*np.outer(q_vec, q_vec) - 2*q0*skew_symmetric(q_vec)
+
+def quat_error(q_TI : np.quaternion, q_FI : np.quaternion) -> np.quaternion:
+    """Relative passive quaternion q_TF (rotation F->T) from two I-referenced
+    quaternions. Contract (verified): quat_to_dcm(quat_error(q_TI, q_FI))
+    == quat_to_dcm(q_TI) @ quat_to_dcm(q_FI).T, and identity when q_TI == q_FI.
+    e.g. quat_error(q_RI, q_BI) -> q_RB, the body-frame error (vector part in B)."""
+    return q_FI.inverse() * q_TI
+
+def dcm_to_quat(T : np.array) -> np.quaternion:
+    """Inverse of quat_to_dcm: passive DCM T_BA -> passive quaternion q_BA.
+    Contract (verified): quat_to_dcm(dcm_to_quat(T)) == T. scipy is active, so
+    feed the transpose to recover the passive quaternion."""
+    q = Rotation.from_matrix(T.T).as_quat()  # scipy active matrix == T.T
+    return np.quaternion(q[3], q[0], q[1], q[2])
+
 def quaternion_multiply(q1 : np.array, q2 : np.array):
     # w1, x1, y1, z1 = q1[3], q1[0], q1[1], q1[2]
     # w2, x2, y2, z2 = q2.w, q2.x, q2.y, q2.z

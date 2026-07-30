@@ -358,9 +358,9 @@ class ZarouratiController:
             e_a = col_vec(np.array(q_ev[self.nf_idx]))
             e4 = q_err.w
             
-            w_d = col_vec(self.satellite.w_ref)
+            w_d = col_vec(self.satellite.w_RI_R)
             w_d_r = col_vec(np.array([w_d[self.nf_idx[0]], w_d[self.nf_idx[1]]]))
-            dw_d = col_vec(self.satellite.dw_ref)
+            dw_d = col_vec(self.satellite.dw_RI_R)
             dw_d_r = col_vec(np.array([dw_d[self.nf_idx[0]], dw_d[self.nf_idx[1]]]))
 
             # Paper Eq. (11c): A(q_e) = (e4^2 - e_v.e_v)I + 2 e_v e_v^T - 2 e4 S(e_v) maps the
@@ -390,7 +390,7 @@ class ZarouratiController:
             # Optionally re-key tau to the start of each reference slew (see __init__); e_d's
             # norm is re-inflated to the new xi automatically by the renormalisation below.
             if self.xi_reset_on_maneuver:
-                w_ref_norm = float(np.linalg.norm(self.satellite.w_ref))
+                w_ref_norm = float(np.linalg.norm(self.satellite.w_RI_R))
                 if w_ref_norm > 1e-3 and self._w_ref_norm_prev <= 1e-3 and (t - self.t0) > 1.0:
                     self.t0 = t
                 self._w_ref_norm_prev = w_ref_norm
@@ -772,15 +772,15 @@ class Controller:
                 
         elif self.sub_type == "Nadafi_FNDO":
            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-           u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_ref, satellite.dw_ref)
+           u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_RI_R, satellite.dw_RI_R)
 
         elif self.sub_type == "Nadafi_BS":
             q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-            u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_ref, satellite.dw_ref)
+            u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_RI_R, satellite.dw_RI_R)
 
         elif self.sub_type == "Nadafi_MFNDO":
             q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
-            u = self.nadafi_controller.calc_output_BS_MFNDO(q_err, w, self.u_wheels_prev, satellite.w_ref, satellite.dw_ref)
+            u = self.nadafi_controller.calc_output_BS_MFNDO(q_err, w, self.u_wheels_prev, satellite.w_RI_R, satellite.dw_RI_R)
 
         
         elif self.sub_type == "Zarourati":
@@ -814,9 +814,9 @@ class Controller:
             if self.nadafi_controller is None:
                 self.nadafi_controller = NadafiController(self.config, sub_type=target)
                 self.nadafi_controller.satellite = satellite
-            q_err = my_utils.get_quaternion_error_Nadafi(satellite.q, satellite.q_ref)
+            q_err = my_utils.get_quaternion_error_Nadafi(satellite.q_BI, satellite.q_RI)
             C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
-            w_err = satellite.w - C @ satellite.w_ref
+            w_err = satellite.w_BI_B - C @ satellite.w_RI_R
             self.nadafi_controller.chi_0 = col_vec(np.array([w_err[0], w_err[1]]))
             if chi_1_init is not None:
                 chi_1_init = np.asarray(chi_1_init).flatten()
@@ -829,26 +829,23 @@ class Controller:
         return True
 
     next_t_sample : float = 0
-    def calc_torque_control_output(self, t, q_curr : np.quaternion,  w_sat : np.array, q_ref : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:
+    def calc_torque_control_output(self, t, q_curr : np.quaternion,  w_BI_B : np.array, q_RI : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:
         if t >= self.next_t_sample:
             self.next_t_sample += self.t_sample
         else:
             return self.u_vec_prev, self.u_wheels_prev
-        # q_sat_error = my_utils.get_quaternion_error_Nadafi(q_ref, q_curr)
-        # q_sat_error = my_utils.get_quaternion_error_bong_wie(q_ref, q_curr)
-        q_sat_error =  q_ref * q_curr.inverse()
-        # q_sat_error =  my_utils.get_quaternion_error(q_curr, q_ref)
-        # q_sat_error =  q_curr.inverse() * q_ref
+        # Body-frame attitude error q_RB (rotation B->R), vector part resolved in B.
+        q_sat_error =  my_utils.quat_error(q_RI, q_curr)
         H_wheels_vec = satellite.wheel_module.H_vec # @TODO check this!!!
         if self.type == "pid":
-            u = self.calc_pid_torque(q_sat_error, w_sat, satellite.M_inertia, satellite.wheel_module.H_vec, satellite.w_ref)
+            u = self.calc_pid_torque(q_sat_error, w_BI_B, satellite.M_inertia, satellite.wheel_module.H_vec, satellite.w_RI_R)
             if self.type == "adaptive":
-                u = self.calc_adaptive_control_torque_output(u, q_curr, q_ref)
+                u = self.calc_adaptive_control_torque_output(u, q_curr, q_RI)
             u_vec = u
             u_wheels = satellite.wheel_module.D_psuedo_inv@u_vec
 
         elif self.type == "backstepping":
-            u = self.calc_backstepping_control_torque(q_sat_error, q_curr, q_ref, w_sat, satellite, f_est, t)
+            u = self.calc_backstepping_control_torque(q_sat_error, q_curr, q_RI, w_BI_B, satellite, f_est, t)
             u_wheels = u
             u_vec = satellite.wheel_module.D@u_wheels
         elif self.type == "lyapunov":

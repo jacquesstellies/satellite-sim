@@ -124,10 +124,10 @@ class Logger:
                     self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.DIsBI_I[i])
                     self.results_data['n_sun_' + axis].append(self.satellite.orbit.nSB_I[i])
                     self.results_data['H_total_' + axis].append((self.satellite.H_total)[i])
-                    self.results_data['w_sat_ref_' + axis].append(self.satellite.w_ref[i])
-                    self.results_data['dw_sat_ref_' + axis].append(self.satellite.dw_ref[i])
+                    self.results_data['w_sat_ref_' + axis].append(self.satellite.w_RI_R[i])
+                    self.results_data['dw_sat_ref_' + axis].append(self.satellite.dw_RI_R[i])
                 
-                q_ref = [self.satellite.q_ref.x, self.satellite.q_ref.y, self.satellite.q_ref.z, self.satellite.q_ref.w]
+                q_ref = [self.satellite.q_RI.x, self.satellite.q_RI.y, self.satellite.q_RI.z, self.satellite.q_RI.w]
                 for i, axis in enumerate(my_utils.q_axes):
                     self.results_data['q_sat_ref_' + axis].append(q_ref[i])
 

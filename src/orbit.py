@@ -36,7 +36,7 @@ class Orbit():
 
     sgp4_sat : Satrec = None
 
-    TOI = np.eye(3) # inertial to orbit frame DCM
+    T_OI = np.eye(3) # inertial to orbit frame DCM
 
     # rSB_I = np.zeros(3) # sun vector in inertial frame
     # rIB_I = np.zeros(3) # orbit vector in inertial frame
@@ -137,10 +137,16 @@ class Orbit():
         self.sBI_I = np.array(sBT_T)  # km
         self.DIsBI_I = np.array(DTsBT_T)  # km/s
         self.nIB_I = -self.sBI_I/np.linalg.norm(self.sBI_I)
-        x = self.DIsBI_I/np.linalg.norm(self.DIsBI_I)
+        # Orthonormal LVLH/orbit (O) frame: z = nadir (-r_hat), y = -orbit-normal
+        # (-h/|h|), x = y x z (~ velocity direction). Building y from h = r x v keeps
+        # T_OI an exact rotation even when r.v != 0 under SGP4/J2 (v_hat is not exactly
+        # perpendicular to r_hat), so dcm_to_quat(T_OI) is faithful.
+        h = my_utils.cross_product_M31M31(self.sBI_I, self.DIsBI_I)
         z = self.nIB_I
-        y = my_utils.cross_product_M31M31(z, x)
-        self.TOI = np.column_stack([x, y, z]) # here the T in TOI means transformation and O refers to the orbit frame
+        y = -h/np.linalg.norm(h)
+        x = my_utils.cross_product_M31M31(y, z)
+        # Rows of the passive DCM T_OI are the O-frame axes in I coords (v_O = T_OI v_I).
+        self.T_OI = np.row_stack([x, y, z])
         rSI_I, _, _ = self.calc_sun_vector_update()
 
         rSB_I = rSI_I - self.sBI_I
@@ -337,7 +343,7 @@ class Disturbances():
     sigma_n = 0.8
     sigma_t = 0.8
     init = True
-    def calc_aero_torque(self, satellite, TBI):
+    def calc_aero_torque(self, satellite, T_BI):
 
         w_earth = 7.272e-5
         if self.orbit.Dlong < 0:
@@ -349,9 +355,9 @@ class Disturbances():
             ratio = self.orbit.Dlat/self.orbit.Dlong
             aero_angle = -1*np.arctan(ratio)
 
-        TBO = TBI@np.linalg.inv(self.orbit.TOI)
+        T_BO = T_BI@np.linalg.inv(self.orbit.T_OI)
 
-        va_b = TBO@[-np.linalg.norm(self.orbit.DIsBI_I*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude)*cos(aero_angle),
+        va_b = T_BO@[-np.linalg.norm(self.orbit.DIsBI_I*1e3) + w_earth*(self.orbit.radius*1e3)*cos(self.orbit.latitude)*cos(aero_angle),
                 -w_earth*self.orbit.radius*1e3*cos(self.orbit.latitude)*sin(aero_angle),
                 0]
         
@@ -379,17 +385,19 @@ class Disturbances():
 
         return T_aero
     
-    def calc_grav_torque(self, satellite, dcm):
-        u_e = dcm@np.array([0,0,1])
-        
-        T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
+    def calc_grav_torque(self, satellite, T_BI):
+        # Gravity-gradient torque uses the nadir (local vertical) unit vector in the
+        # body frame. nadir in inertial is nIB_I (= -r_hat); rotate it into body.
+        u_e = T_BI @ self.orbit.nIB_I
+
+        T_grav = 3*MU/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
         return T_grav
 
-    def calc_solar_radiation_pressure_torque(self, satellite, dcm):
+    def calc_solar_radiation_pressure_torque(self, satellite, T_BI):
         if self.orbit.eclipse:
             return np.zeros(3)
 
-        s_B = -1*(dcm @ self.orbit.nSB_I) # photon travel direction (sun -> satellite) in body frame
+        s_B = -1*(T_BI @ self.orbit.nSB_I) # photon travel direction (sun -> satellite) in body frame
         T_solar = np.zeros(3)
 
         # Wie solar thrust model (Jordaan 2016, eq. 3.3.29-3.3.32):
@@ -411,15 +419,15 @@ class Disturbances():
     #     T_mag = np.cross(m, B)
     #     return T_mag
 
-    def calc_torque_realistic(self, satellite, dcm, t):
-        T_aero = self.calc_aero_torque(satellite, dcm)
-        T_solar = self.calc_solar_radiation_pressure_torque(satellite, dcm)
-        T_grav = self.calc_grav_torque(satellite, dcm)
+    def calc_torque_realistic(self, satellite, T_BI, t):
+        T_aero = self.calc_aero_torque(satellite, T_BI)
+        T_solar = self.calc_solar_radiation_pressure_torque(satellite, T_BI)
+        T_grav = self.calc_grav_torque(satellite, T_BI)
         T_dist = T_aero + T_solar + T_grav
         return T_dist
-    
+
     t_sample_next = 0.0
-    def calc_torque(self, satellite, dcm, t):
+    def calc_torque(self, satellite, T_BI, t):
         if t >= self.t_sample_next:
             self.t_sample_next += self.t_sample
         else:
@@ -432,10 +440,10 @@ class Disturbances():
             if self.model == "Nadafi":
                 self.T = self.calc_dist_torque_Nadafi(t)
             elif self.model == "Zarourati":
-                self.T = self.calc_dist_torque_Zarourati(t, satellite.w)
+                self.T = self.calc_dist_torque_Zarourati(t, satellite.w_BI_B)
             elif self.model == "realistic":
-                self.T = self.calc_torque_realistic(satellite, dcm, t)
-                # self.T_dist = self.disturbances.calc_torque_realistic(t, self, dcm)
+                self.T = self.calc_torque_realistic(satellite, T_BI, t)
+                # self.T = self.calc_torque_realistic(satellite, T_BI, t)
             else:
                 raise Exception("disturbance model not specified")
         else:
