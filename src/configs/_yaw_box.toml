@@ -1,0 +1,157 @@
+debug_log = false
+
+[simulation]
+enable = true
+duration = 220.0
+test_mode_en = false
+test_duration = 3
+test_resolution = 1
+iterations = 1
+tuning = false
+input_type = "ref"
+log_enable = true
+verbose = true
+
+[tuning]
+iterations = 30
+duration = 100
+postive_bounds_en = false
+
+[controller]
+enable = true
+c = [ 1, 1, 1,]
+k = 2
+kj = 2
+kd = 4
+ki = 50
+T_max = 1000
+T_min = 0
+filter_coef = 0
+t_sample = 0.01
+type = "backstepping"
+sub_type = "Nadafi_FNDO"
+adaptive_gain = 0.1
+detection_en = true
+
+[backstepping]
+alpha = 1
+beta = 1.8
+k = 100
+eta_1 = 0.1
+upsilon = 0.01
+c_1 = 0.01
+c_2 = 0.1
+
+[Nadafi]
+Gamma_z11 = 1.5
+Gamma_z22 = 1.2
+lambda_1 = 3
+lambda_2 = 3
+lambda_3 = 6
+kappa_0 = 0.1
+kappa_1 = 0.15
+L11 = 10.0
+L22 = 10.0
+Gamma_mu11 = 0.05
+Gamma_mu22 = 0.05
+
+[observer]
+enable = false
+feedback_en = false
+t_sample = 0.1
+gain = [ 3.0, 0.005, 0.0,]
+
+[wheels]
+config = "ortho"
+mass = 0.31
+radius = 0.066
+height = 0.025
+M_inertia = 0.05
+use_inertia = false
+max_speed_rpm = 10000
+max_torque = 1.0
+num_wheels = 3
+D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
+friction_coef = 0.0
+saturation_enable = false
+
+[magt]
+mag_moment_max = 100
+t_sample = 1
+enable = true
+mode = "momentum_dump_xyz"
+
+[faults]
+master_enable = false
+
+[satellite]
+mode = "tracking"
+euler_init_en = true
+euler_init = [ 0, 0, 0,]
+q_init = [ 0, 0, 0, 1,]
+use_ref_euler = false
+ref_euler = [ 2, 2, 0,]
+use_ref_q = false
+ref_q = [ 0, 0, 0, 1,]
+use_ref_series = true
+ref_q_series = [ [ 0.0, 0.0, 0.0, 1.0,], [ 0.17311723304456925, 0.0, 0.0, 0.9849012253129713,], [ 0.17050337494838746, 0.17050337494838746, 0.029969576377007697, 0.9700304236229923,], [ 0.0, 0.1627407327687583, 0.05903414499165112, 0.9849012253129713,], [ 0.010219827836106558, -0.010219827836106588, 0.058142801737580796, 0.9982036489835654,], [ 0.18287177468529625, -2.949029909160572e-17, 0.059034144991651126, 0.981362768678614,], [ 0.16989080712659935, 0.16989080712659932, 0.0898010573730492, 0.9665453933480971,], [ 2.7755575615628914e-17, 0.15177955353149847, 0.11785619789058206, 0.9813627686786142,], [ 0.02040293887597079, -0.020402938875970777, 0.11607671371316229, 0.9928210496882102,], [ 0.19196931252935703, -1.3877787807814457e-17, 0.11785619789058206, 0.9742985680302431,], [ 0.16866787225668173, 0.1686678722566817, 0.14930990992771273, 0.9595878534736597,], [ 2.7755575615628914e-17, 0.14027307558371804, 0.17625482858776526, 0.9742985680302431,], [ 0.03051274823585879, -0.030512748235858755, 0.17359359664341772, 0.9838715401893647,], [ 0.0, 0.0, 0.17364817766693033, 0.984807753012208,],]
+ref_t_series = [ 0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0, 105.0, 120.0, 135.0, 150.0, 165.0, 180.0, 195.0,]
+sinusoidal_ref_amplitude_deg = [ 45, 45, 0,]
+sinusoidal_ref_frequency = [ 0.05, 0.05, 0.0,]
+w_init_dps = [ 0, 0, 0,]
+wheels_control_enable = true
+mass = 12
+M_Inertia = [ [ 2.5, 0.0, 0.0,], [ 0.0, 3.5, 0.0,], [ 0.0, 0.0, 4.5,],]
+inertia_override = true
+delta_inertia_frac = 0.8
+delta_inertia_freq = [ 0.1, 0.2, 0.3,]
+
+[orbit]
+altitude_km = 500
+t_sample = 0.1
+
+[disturbances]
+enable = true
+model = "Nadafi"
+
+[output]
+accuracy_enable = true
+energy_enable = true
+log_enable = true
+append_date = false
+pdf_output_enable = true
+log_file_name_overide = "None"
+separate_plots_display = false
+show_plots = false
+
+[fault.0]
+mul_fault = [ 0.65, 0.65, 0.0,]
+add_fault = [ 0, 0, 0,]
+time = 0
+master_enable = true
+
+[fault.1]
+mul_fault = [ 1.0, 1.0, 1.0,]
+add_fault = [ 0, 0, 0,]
+time = 100
+master_enable = false
+
+[satellite.dimensions]
+model = "EOSSAT"
+x = 0.3
+y = 0.3
+z = 0.3
+
+[output.visualizer]
+enable = false
+file_path = "/opt/satellite-visualizer/dist/telemetry.json"
+t_sample = 1.0
+
+[FDIR.wheels]
+enable = false
+inst_time_threshold = 10
+inst_count_threshold = 10
+
+[FDIR.satellite]
+enable = true
+w_max_dps = 600
