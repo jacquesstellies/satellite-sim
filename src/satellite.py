@@ -424,14 +424,14 @@ class Satellite(Body):
 
         self.H = self.M_inertia@(self.w_BI_B)
         self.H_total = self.H + self.wheel_module.H_vec
-        self.dw = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w_BI_B,self.H_total) + self.magt_module.T)
+        self.dw_BI_B = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w_BI_B,self.H_total) + self.magt_module.T)
 
         #### Calculate the new satellite body state rates
         # Kinematics dq_BI = 0.5 * q_BI (x) w_BI_B  (Hamilton, body-frame rate).
         w_BI_B_quat = np.quaternion(0, self.w_BI_B[0], self.w_BI_B[1], self.w_BI_B[2])
 
-        dq = 0.5*self.q_BI*w_BI_B_quat
-        dq = [dq.x, dq.y, dq.z, dq.w]
+        dq_BI = 0.5*self.q_BI*w_BI_B_quat
+        dq_BI = [dq_BI.x, dq_BI.y, dq_BI.z, dq_BI.w]
         control_power = abs(self.wheel_module.dH_vec * self.w_BI_B) ## @TODO fix this
         
         self.fault_module.update(t)
@@ -439,7 +439,7 @@ class Satellite(Body):
 
         self.logger.log_data(t)
 
-        return np.hstack([self.dw, dq, control_power, self.wheel_module.dw_wheels])
+        return np.hstack([self.dw_BI_B, dq_BI, control_power, self.wheel_module.dw_wheels])
 
     
     def update_fd(self, t):
