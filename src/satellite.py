@@ -9,7 +9,7 @@ from controller import Controller
 from fault import Fault, FaultModule
 from wheels import WheelModule
 from orbit import Disturbances, Orbit
-from observer import ObserverModule
+from observer import ObserverModule, FNDOFaultDetector
 
 class DivergentRate(Exception):
     pass
@@ -110,6 +110,12 @@ class Satellite(Body):
 
         self.E = np.eye(self.wheel_module.num_wheels)
         self.f_wheels = np.zeros(self.wheel_module.num_wheels)
+
+        detection_config = config.get('detection', None)
+        if detection_config is not None and detection_config.get('enable', False):
+            self.fault_detector = FNDOFaultDetector(config, self.M_inertia, self.wheel_module)
+        else:
+            self.fault_detector = None
 
         # Control Variables
         if not self.mode.startswith("nominal"):
@@ -436,9 +442,18 @@ class Satellite(Body):
             raise DivergentRate(f"Divergent rate detected, w_sat = {self.w*my_utils.RAD_TO_DEG} at time {t}")
         
     def update_FDIR(self, t):
-        
+
         self.update_fd(t)
 
         for wheel in self.wheel_module.wheels:
             wheel.update_fd(t)
-        
+
+        if self.fault_detector is not None:
+            self.fault_detector.update(t, self.w, self.T_ctr_wheels,
+                                       self.wheel_module.H_vec, self.magt_module.T,
+                                       T_dist=self.T_dist)
+            if self.fault_detector.latched_wheel >= 0 and not self.fault_detector.reconfigured:
+                self.fault_detector.reconfigured = True  # one-shot: never re-enters
+                if self.config['detection'].get('reconfigure_en', True):
+                    self.controller.activate_underactuated(t, self, self.fault_detector.latched_wheel,
+                                                           chi_1_init=self.fault_detector.chi_1)

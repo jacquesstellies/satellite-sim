@@ -40,6 +40,7 @@ class NadafiController:
     t_sample = None
 
     F = np.asmatrix(np.zeros(2)).T
+    Z = np.asmatrix(np.zeros(2)).T
     chi_0 = np.asmatrix(np.zeros(2)).T
     chi_1 = np.asmatrix(np.zeros(2)).T
     v_0 = np.asmatrix(np.zeros(2)).T
@@ -49,9 +50,13 @@ class NadafiController:
 
     config = None
     
-    def __init__(self, config):
+    def __init__(self, config, sub_type=None):
         self.config = config
-        if not config['controller']['sub_type'].startswith("Nadafi"):
+        # sub_type can be passed explicitly so FDIR can construct this controller
+        # at runtime even when the configured (initial) controller is not Nadafi
+        if sub_type is None:
+            sub_type = config['controller']['sub_type']
+        if not sub_type.startswith("Nadafi"):
             return
         Nadafi_config = self.config['Nadafi']
         self.Gamma_z11 = np.array(Nadafi_config['Gamma_z11'])
@@ -72,14 +77,14 @@ class NadafiController:
             print("lambda_2 ", self.lambda_2)
             print("lambda_3 ", self.lambda_3)
 
-        if self.config['controller']['sub_type'] == 'Nadafi_FNDO':
+        if sub_type == 'Nadafi_FNDO':
             self.L11 = np.array(Nadafi_config['L11'])
             self.L22 = np.array(Nadafi_config['L22'])
 
             self.kappa_0 = Nadafi_config['kappa_0']
             self.kappa_1 = Nadafi_config['kappa_1']
 
-        if self.config['controller']['sub_type'] == 'Nadafi_MFNDO':
+        if sub_type == 'Nadafi_MFNDO':
             self.L11 = np.array(Nadafi_config['L11'])
             self.L22 = np.array(Nadafi_config['L22'])
 
@@ -705,7 +710,7 @@ class Controller:
             u3 = -1/2*q_err.z-p3*w[0]*w[1] - s*0.5*(q_err.w*w[2]+q_err.x*w[1]-q_err.y*w[0]) \
                 - g*(e[2])
             u = np.array([u1, u2, u3])
-        elif self.config["controller"]["sub_type"] == "arctan":
+        elif self.sub_type == "arctan":
             raise(Exception("arctan not implemented"))
         #     a  = [1, 1, 1]
         #     b  = [1, 1, 1]
@@ -722,7 +727,7 @@ class Controller:
         #         - g*(e[1])
         #     u3 = -1/2*q_err.z-p3*w[0]*w[1] - s*0.5*phi_dot*(q_err.w*w[2]+q_err.x*w[1]-q_err.y*w[0]) \
         #         - g*(e[2])
-        elif self.config["controller"]["sub_type"] == "Shen":
+        elif self.sub_type == "Shen":
             u_max = self.config["wheels"]["max_torque"]
             D_plus = satellite.wheel_module.D_psuedo_inv
             eta_0 = np.linalg.norm(D_plus)
@@ -765,11 +770,11 @@ class Controller:
             if(np.shape(u)[0] != satellite.wheel_module.num_wheels):
                 raise(Exception("invalid shape of u"))
                 
-        elif self.config["controller"]["sub_type"] == "Nadafi_FNDO":
+        elif self.sub_type == "Nadafi_FNDO":
            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
            u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_ref, satellite.dw_ref)
 
-        elif self.config["controller"]["sub_type"] == "Nadafi_BS":
+        elif self.sub_type == "Nadafi_BS":
             q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
             u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_ref, satellite.dw_ref)
 
@@ -783,6 +788,45 @@ class Controller:
             u = self.zarourati_controller.calc_output(q_err, w, self.u_wheels_prev, t)
 
         return u
+
+    def activate_underactuated(self, t, satellite, f_idx, chi_1_init=None):
+        """FDIR reconfiguration: hand control to the underactuated controller
+        after the fault detector isolates wheel f_idx.
+
+        chi_1_init is the detector's lumped disturbance estimate (body accel
+        units); seeding the controller's FNDO with it and chi_0 with the current
+        rate error avoids restarting the super-twisting observer from zero.
+        """
+        target = self.config['detection'].get('switch_to', 'Nadafi_FNDO')
+        # both underactuated controllers hardcode which wheel they drop
+        # (Nadafi: Aq/phi built for f_idx=2, Zarourati: f_idx=1)
+        supported_f_idx = 1 if target == 'Zarourati' else 2
+        if f_idx != supported_f_idx:
+            print(f"FDIR: wheel {f_idx} isolated but {target} only supports wheel "
+                  f"{supported_f_idx} - not reconfiguring")
+            return False
+
+        if target == 'Zarourati':
+            if self.zarourati_controller is None:
+                self.zarourati_controller = ZarouratiController(self.config)
+                self.zarourati_controller.satellite = satellite
+        else:
+            if self.nadafi_controller is None:
+                self.nadafi_controller = NadafiController(self.config, sub_type=target)
+                self.nadafi_controller.satellite = satellite
+            q_err = my_utils.get_quaternion_error_Nadafi(satellite.q, satellite.q_ref)
+            C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+            w_err = satellite.w - C @ satellite.w_ref
+            self.nadafi_controller.chi_0 = col_vec(np.array([w_err[0], w_err[1]]))
+            if chi_1_init is not None:
+                chi_1_init = np.asarray(chi_1_init).flatten()
+                self.nadafi_controller.chi_1 = col_vec(chi_1_init[[0, 1]])
+
+        self.type = "backstepping"
+        self.sub_type = target
+        if self.config['simulation']['verbose']:
+            print(f"FDIR: reconfigured to {target} (wheel {f_idx} isolated) at t={t:.2f}")
+        return True
 
     next_t_sample : float = 0
     def calc_torque_control_output(self, t, q_curr : np.quaternion,  w_sat : np.array, q_ref : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:

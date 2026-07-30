@@ -329,6 +329,11 @@ class Disturbances():
         self.dipole_vec = ([0,0,1])
         self.t_sample = orbit.t_sample
 
+        W_s = 1361 # W/m^2 at 1 AU
+        c = 299792458 # m/s
+        self.P_solar = W_s/c # N/m^2 at 1 AU
+        self.rho_s = config['disturbances'].get('rho_s', 0.6) # specular reflectivity (aluminised Mylar)
+
     sigma_n = 0.8
     sigma_t = 0.8
     init = True
@@ -380,22 +385,37 @@ class Disturbances():
         T_grav = 3*self.orbit.mu/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
         return T_grav
 
-    # def calc_solar_radiation_pressure_torque(self, satellite, dcm):
-    #     u_s = 
+    def calc_solar_radiation_pressure_torque(self, satellite, dcm):
+        if self.orbit.eclipse:
+            return np.zeros(3)
+
+        s_B = -1*(dcm @ self.orbit.nSB_I) # photon travel direction (sun -> satellite) in body frame
+        T_solar = np.zeros(3)
+
+        # Wie solar thrust model (Jordaan 2016, eq. 3.3.29-3.3.32):
+        # F_n = P*A*(1+rho_s)*cos^2(xi), F_t = P*A*(1-rho_s)*cos(xi)*sin(xi)
+        # combined into vector form F = P*A*cos(xi)*((1-rho_s)*s - 2*rho_s*cos(xi)*n)
+        for i, face in enumerate(satellite.faces):
+            cos_xi = (-1)*(face.norm_vec)@s_B
+            cos_xi_h = np.heaviside(cos_xi, 0)
+            F_solar = (self.P_solar*face.area*cos_xi_h*cos_xi)*(
+                        (1-self.rho_s)*s_B - 2*self.rho_s*cos_xi*face.norm_vec)
+            T_solar += my_utils.cross_product_M31M31(face.r_com_to_cop, F_solar)
+
+        return T_solar
+
+
     # def calc_mag_torque(self, satellite, dcm):
     #     m = 
     #     B = self.orbit.calc_magnetic_field(satellite, dcm)
     #     T_mag = np.cross(m, B)
     #     return T_mag
 
-    # def calc_solar_radiation_pressure_torque(self, satellite, q):
-    #     rotation_obj = my_utils.conv_numpy_to_Rotation_obj_q(q)
-    #     dcm = rotation_obj.as_matrix()
-
     def calc_torque_realistic(self, satellite, dcm, t):
         T_aero = self.calc_aero_torque(satellite, dcm)
-        # T_grav = self.calc_grav_torque(satellite, dcm)
-        T_dist = T_aero #+ T_grav
+        T_solar = self.calc_solar_radiation_pressure_torque(satellite, dcm)
+        T_grav = self.calc_grav_torque(satellite, dcm)
+        T_dist = T_aero + T_solar + T_grav
         return T_dist
     
     t_sample_next = 0.0
@@ -429,9 +449,11 @@ class Disturbances():
         return np.array([0.1 + 9*np.sin(0.5*t), 0.1 + 7.5*np.sin(0.8*t), 0])*7.5e-3
     
     def calc_dist_torque_Zarourati(self, t, w_sat):
+        # Paper Eq. (38): d = 1e-5 * [...], bounded by d_bar = 1.1e-4 N.m. (The previous 7.5e-3
+        # scale was copied from the Nadafi model and made the disturbance ~750x the paper's.)
         n = 0.0011
         return np.array(
                     [-3 + 4*cos(n*t) - cos(n*t) + 2*w_sat[0]*sin(n*t),
                     4 + 3*sin(n*t) - 2*cos(n*t) + w_sat[1]*cos(n*t),
                     -3 + 4*sin(n*t) - 3*sin(n*t) - 2*w_sat[2]*cos(n*t)]
-                        )*7.5e-3
+                        )*1e-5

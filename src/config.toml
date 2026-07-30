@@ -2,33 +2,31 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 300
-resolution = 0.1
+duration = 100
 test_mode_en = false
 test_duration = 3
 test_resolution = 1
 iterations = 1
-tuning = false
+tuning = true
 input_type="ref" # ref, ref_square, torque, sine, square
 log_enable = true
 verbose = true
-# logger_fields = 
 
 [controller]
 enable = true
-c = [ 1, 1, 1,]
-k = 2
-kj = 2
-kd = 4.0
+c = [ 0, 0, 0,]
+k = 0.0001
+kj = 1.0
+kd = 1.0
 ki = 0
 T_max = 1000
 T_min = 0
 filter_coef = 0
-t_sample = 0.1
+t_sample = 0.01
 type = "pid" # pid, backstepping, adaptive
-sub_type = "Nadafi_BS" # Nadafi_BS, Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
+sub_type = "" # Nadafi_BS, Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
 adaptive_gain = 0.1
-detection_en = true
+detection_en = false
 
 [backstepping]
 alpha = 1 # makes peaks and troughs more pointy
@@ -66,6 +64,26 @@ feedback_en = false
 t_sample = 0.1
 gain = [ 3.00, 0.005, 0.000 ]
 
+# 3-axis FNDO wheel-fault detection + reconfiguration to the underactuated controller
+[detection]
+enable = false
+t_sample = 0.01
+kappa_0 = 2.0        # super-twisting proportional gain
+kappa_1 = 1.0        # super-twisting integral gain
+L = [ 10.0, 10.0, 10.0 ]
+bl_eps = 0.01        # boundary layer for sign() -> sat(), avoids forward-Euler chatter
+u_min = 0.002        # Nm, excitation gate: no RLS update below this commanded torque
+rls_lambda = 0.998   # forgetting factor (~5 s memory at 100 Hz)
+rls_p0 = 10.0
+E_threshold = 0.7    # declare wheel faulty below this effectiveness
+confirm_time = 2.0   # s of gated samples below threshold before latching
+warmup_time = 2.0    # s, let the observer converge before fitting
+reconfigure_en = true      # false = detection/estimation only (for tuning)
+switch_to = "Nadafi_FNDO"  # Nadafi_FNDO, Nadafi_BS, Nadafi_MFNDO, Zarourati
+wheels_monitored = [ 2,]   # wheels allowed to latch (effectiveness only identifiable
+                           # where torque excitation dominates external disturbance)
+feed_T_dist = false        # ablation: give the observer the exact disturbance torque
+
 [wheels]
 config = "ortho" # tetra, ortho, pyramid, custom
 mass = 0.31
@@ -76,7 +94,7 @@ max_torque = 0.2
 num_wheels = 3
 D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
 friction_coef = 0.000
-saturation_enable = true
+saturation_enable = false
 M_inertia = 0.05
 use_inertia = true
 
@@ -95,7 +113,7 @@ master_enable = false
 mul_fault = [ 1.0, 1.0, 0.0,]
 add_fault = [ 0, 0, 0,]
 time = 0
-master_enable = true
+master_enable = false
 
 [fault.1]
 # mul_fault = [ 1.0, 1.0, 1.0, 1.0,]
@@ -107,7 +125,7 @@ time = 100
 master_enable = false
 
 [satellite]
-mode="nominal_night"
+mode="ref_pointing"
 euler_init_en = false
 euler_init = [ 0, 0, 0,]
 # euler_init = [ 0, 0, 0,]
@@ -126,9 +144,9 @@ ref_t_series=[ 0, 30,]
 wheels_control_enable = true
 w_init_dps = [0, 0, 0,]
 mass = 12
-# M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
+M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
 # M_Inertia = [ [ 50.0, 1.2, 0.5,], [ 1.2, 50.0, 1.5,], [ 0.5, 1.5, 50.0,],]
-M_Inertia = [ [ 2.5, 0.0, 0.0,], [ 0.0, 3.5, 0.0,], [ 0.0, 0.0, 4.5,], ]
+# M_Inertia = [ [ 2.5, 0.0, 0.0,], [ 0.0, 3.5, 0.0,], [ 0.0, 0.0, 4.5,], ]
 inertia_override = true
 
 [orbit]
@@ -139,8 +157,9 @@ t_sample = 0.1
 
 
 [disturbances]
-enable = false
-model = "realistic"
+enable = true
+model = "Nadafi"
+rho_s = 0.6 # specular reflectivity for SRP torque (aluminised Mylar)
 
 
 [output]
