@@ -632,7 +632,7 @@ class Controller:
         self.u_vec_prev = np.zeros(3)
         self.u_wheels_prev = np.zeros(self.wheel_module.num_wheels)
 
-        self.q_prev = np.zeros(4)
+        self.q_prev = np.quaternion(1, 0, 0, 0)
 
         self.sub_type = config['controller']['sub_type']
         self.e_d_prev = col_vec(np.zeros(2))
@@ -688,7 +688,7 @@ class Controller:
     dwe_u_filtered = 0.0
 
     init = True
-    def calc_backstepping_control_torque(self, q_err: np.quaternion, q_curr : np.quaternion, q_ref : np.quaternion, w, satellite, f_est: np.array, t: float):
+    def calc_backstepping_control_torque(self, q_err: np.quaternion, q_BI : np.quaternion, q_RI : np.quaternion, w, satellite, f_est: np.array, t: float):
         
         u = np.zeros(3)
         if self.sub_type not in self.sub_types:
@@ -771,20 +771,20 @@ class Controller:
                 raise(Exception("invalid shape of u"))
                 
         elif self.sub_type == "Nadafi_FNDO":
-           q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
+           q_err = my_utils.get_quaternion_error_Nadafi(q_BI, q_RI)
            u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_RI_R, satellite.dw_RI_R)
 
         elif self.sub_type == "Nadafi_BS":
-            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
+            q_err = my_utils.get_quaternion_error_Nadafi(q_BI, q_RI)
             u = self.nadafi_controller.calc_output_BS(q_err, w, satellite.w_RI_R, satellite.dw_RI_R)
 
         elif self.sub_type == "Nadafi_MFNDO":
-            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
+            q_err = my_utils.get_quaternion_error_Nadafi(q_BI, q_RI)
             u = self.nadafi_controller.calc_output_BS_MFNDO(q_err, w, self.u_wheels_prev, satellite.w_RI_R, satellite.dw_RI_R)
 
         
         elif self.sub_type == "Zarourati":
-            q_err = my_utils.get_quaternion_error_Nadafi(q_curr, q_ref)
+            q_err = my_utils.get_quaternion_error_Nadafi(q_BI, q_RI)
             u = self.zarourati_controller.calc_output(q_err, w, self.u_wheels_prev, t)
 
         return u
@@ -829,28 +829,28 @@ class Controller:
         return True
 
     next_t_sample : float = 0
-    def calc_torque_control_output(self, t, q_curr : np.quaternion,  w_BI_B : np.array, q_RI : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:
+    def calc_torque_control_output(self, t, q_BI : np.quaternion,  w_BI_B : np.array, q_RI : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:
         if t >= self.next_t_sample:
             self.next_t_sample += self.t_sample
         else:
             return self.u_vec_prev, self.u_wheels_prev
         # Body-frame attitude error q_RB (rotation B->R), vector part resolved in B.
-        q_sat_error =  my_utils.quat_error(q_RI, q_curr)
+        q_RB =  my_utils.quat_error(q_RI, q_BI)
         H_wheels_vec = satellite.wheel_module.H_vec # @TODO check this!!!
         if self.type == "pid":
-            u = self.calc_pid_torque(q_sat_error, w_BI_B, satellite.M_inertia, satellite.wheel_module.H_vec, satellite.w_RI_R)
+            u = self.calc_pid_torque(q_RB, w_BI_B, satellite.M_inertia, satellite.wheel_module.H_vec, satellite.w_RI_R)
             if self.type == "adaptive":
-                u = self.calc_adaptive_control_torque_output(u, q_curr, q_RI)
+                u = self.calc_adaptive_control_torque_output(u, q_BI, q_RI)
             u_vec = u
             u_wheels = satellite.wheel_module.D_psuedo_inv@u_vec
 
         elif self.type == "backstepping":
-            u = self.calc_backstepping_control_torque(q_sat_error, q_curr, q_RI, w_BI_B, satellite, f_est, t)
+            u = self.calc_backstepping_control_torque(q_RB, q_BI, q_RI, w_BI_B, satellite, f_est, t)
             u_wheels = u
             u_vec = satellite.wheel_module.D@u_wheels
         elif self.type == "lyapunov":
             urakubo_controller = UrakuboController(self.config)
-            u_vec = urakubo_controller.calc_output(q_sat_error)
+            u_vec = urakubo_controller.calc_output(q_RB)
             u_wheels = satellite.wheel_module.D_psuedo_inv@u_vec
         else:
             raise Exception(f"controller type {self.type} is not a valid type")
