@@ -231,10 +231,15 @@ class Simulation:
             max_step = self.satellite.controller.t_sample
         
         self.sim_time_series = np.arange(0, self.sim_time, max_step)
+        # first_step pins scipy's automatic initial-step heuristic, which otherwise proposes
+        # a trial evaluation up to t_bound away when the initial state rates are ~0 (e.g. the
+        # satellite starts at rest exactly on the reference). That stray far-future call to
+        # calc_state_rates permanently advances Satellite.next_t_ref_update past the whole
+        # sim, freezing the reference generator for the rest of the run.
         sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
                         t_eval=self.sim_time_series,
-                        max_step=max_step)
-        
+                        max_step=max_step, first_step=max_step)
+
         # Integrate satellite dynamics over time
         t_monotonic_end_unix = time.time()
 
@@ -248,9 +253,10 @@ class Simulation:
             max_step = self.satellite.controller.t_sample
         self.sim_time_series = np.arange(0, self.sim_time, max_step)
         try:
+            # see simulate() re: first_step
             sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
                             t_eval=self.sim_time_series,
-                            max_step=max_step)
+                            max_step=max_step, first_step=max_step)
         except DivergentRate:
             # print("divergent rate hit")
             return -1
