@@ -200,8 +200,13 @@ def quat_error(q_TI : np.quaternion, q_FI : np.quaternion) -> np.quaternion:
     """Relative passive quaternion q_TF (rotation F->T) from two I-referenced
     quaternions. Contract (verified): quat_to_dcm(quat_error(q_TI, q_FI))
     == quat_to_dcm(q_TI) @ quat_to_dcm(q_FI).T, and identity when q_TI == q_FI.
-    e.g. quat_error(q_RI, q_BI) -> q_RB, the body-frame error (vector part in B)."""
-    return q_FI.inverse() * q_TI
+    e.g. quat_error(q_RI, q_BI) -> q_RB, the body-frame error (vector part in B).
+    Scalar part is kept >= 0 (q and -q are the same attitude) so feedback always
+    takes the short way round instead of unwinding past 180 deg."""
+    q_err = q_FI.inverse() * q_TI
+    if q_err.w < 0:
+        q_err = -q_err
+    return q_err
 
 def dcm_to_quat(T : np.array) -> np.quaternion:
     """Inverse of quat_to_dcm: passive DCM T_BA -> passive quaternion q_BA.
@@ -239,6 +244,10 @@ def get_quaternion_error_Nadafi(qd : np.quaternion, q : np.quaternion):
                    [qd.y, qd.z, -1*qd.w, -1*qd.x],
                    [qd.z, -1*qd.y, qd.x, -1*qd.w]])\
         @ np.array([q.w, q.x, q.y, q.z])
+    # Scalar part >= 0 (q and -q are the same attitude) so feedback always
+    # takes the short way round instead of unwinding past 180 deg.
+    if qe[0] < 0:
+        qe = -qe
     return quaternion.from_float_array([qe[0], qe[1], qe[2], qe[3]])
 
 # assumes scalar-last format
