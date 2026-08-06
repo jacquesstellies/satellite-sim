@@ -102,7 +102,7 @@ w_init_dps = [ 0, 0, 0,]
 wheels_control_enable = true
 mass = 12
 M_Inertia = [ [ 2.5, 0.0, 0.0,], [ 0.0, 3.5, 0.0,], [ 0.0, 0.0, 4.5,],]
-inertia_override = true
+
 delta_inertia_frac = 0.8
 delta_inertia_freq = [ 0.1, 0.2, 0.3,]
 

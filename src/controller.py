@@ -69,13 +69,13 @@ class NadafiController:
         self.a = self.lambda_2 - self.lambda_3
         self.b = self.lambda_3 - self.lambda_1
         self.t_sample = config['controller']['t_sample']
-        if config['simulation']['verbose'] is True:
-            print("Nadafi Controller Gains:")
-            print("Gamma_z11 ", self.Gamma_z11)
-            print("Gamma_z22 ", self.Gamma_z22)
-            print("lambda_1 ", self.lambda_1)
-            print("lambda_2 ", self.lambda_2)
-            print("lambda_3 ", self.lambda_3)
+        # if config['simulation']['verbose'] is True:
+        #     print("Nadafi Controller Gains:")
+        #     print("Gamma_z11 ", self.Gamma_z11)
+        #     print("Gamma_z22 ", self.Gamma_z22)
+        #     print("lambda_1 ", self.lambda_1)
+        #     print("lambda_2 ", self.lambda_2)
+        #     print("lambda_3 ", self.lambda_3)
 
         if sub_type == 'Nadafi_FNDO':
             self.L11 = np.array(Nadafi_config['L11'])

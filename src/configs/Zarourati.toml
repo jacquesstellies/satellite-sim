@@ -142,7 +142,7 @@ w_init_dps = [ 0, 0, 0,]
 wheels_control_enable = true
 mass = 12
 M_Inertia = [ [ 0.919, -0.023, -0.020], [ -0.023, 0.916, 0.009], [ -0.020, 0.009, 0.444] ]
-inertia_override = true
+
 # Sinusoidal parametric uncertainty: Delta J = frac * diag(J) .* sin(freq*t).
 # Must be < 1 (the old hard-coded [2, 2.8, 3.6] kg.m2 made this plant's inertia negative).
 delta_inertia_frac = 0.1

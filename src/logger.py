@@ -4,28 +4,33 @@ import os
 import my_utils
 import toml
 import pandas as pd
-from satellite import Satellite
-
+# from satellite import Satellite
+from datetime import datetime
 class Logger:
 
-    log_file_name = ""
+    log_name = ""
     log_folder_path = ""
     results_data : dict = None
-    satellite : Satellite = None
+    satellite = None
     enable = True
     next_timestamp = 0.0
     initialized = False
     verbose = False
     config = None
 
-    def init(self, config, results_data : dict, satellite, enable, logger_fields : list):
+    def __init__(self, config, log_name, log_folder_path):
+        self.log_name = log_name
+        self.log_folder_path = log_folder_path
+        self.config = config
+        self.init_results_summary_file()
+
+
+    def post_init(self, results_data : dict, satellite, enable, logger_fields=None):
         self.initialized = True
         self.results_data = results_data
         self.satellite = satellite
         self.enable = enable
-        self.verbose = config['simulation']['verbose']
-        self.config = config
-        
+        self.verbose = self.config['simulation']['verbose']
         self.results_data["time"] = []
         self.results_data["jd"] = []
 
@@ -65,7 +70,7 @@ class Logger:
         # detection-triggered reconfiguration can activate an underactuated
         # controller at runtime, so its channels are registered whenever it
         # *could* become active (NaN-padded while inactive to keep columns equal)
-        detection_config = config.get('detection', {})
+        detection_config = self.config.get('detection', {})
         self.detection_keys_en = detection_config.get('enable', False)
         switch_to = detection_config.get('switch_to', 'Nadafi_FNDO') if self.detection_keys_en else ''
 
@@ -108,7 +113,7 @@ class Logger:
 
         self.next_timestamp = self.satellite.controller.t_sample
 
-    def log_data(self, t):
+    def store_data(self, t):
         if self.enable and self.initialized:
             if t >= self.next_timestamp:
                 # print("logging data")
@@ -223,8 +228,17 @@ class Logger:
                 #     self.results_data[f'control_theta_{axis}'].append(self.satellite.controller.theta[i])
                 self.next_timestamp += self.satellite.controller.t_sample
     
-    def log(self, message):
+    def log(self, message, to_results_file=False, to_console=True):
         if self.config['simulation']['tuning']:
             return            
-        if self.verbose:
+        if self.verbose and to_console:
             print(f"{message}")
+        if to_results_file:
+            with open(fr'{self.log_folder_path}/{self.log_name}.log', 'a+') as file:
+                file.write(f"{message}\n")
+    
+    def init_results_summary_file(self):
+        if not os.path.exists(self.log_folder_path):
+            os.makedirs(self.log_folder_path)
+        with open(fr'{self.log_folder_path}/{self.log_name}_results.log', 'w+') as file:
+            file.write(f"Log file created at {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}\n")

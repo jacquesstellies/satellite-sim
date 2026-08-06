@@ -1,7 +1,6 @@
 import numpy as np
 from numpy import cos, sin, tan, arccos, arcsin, arctan
 import math
-from state_provider import StateProvider
 
 import my_utils as my_utils
 import my_globals

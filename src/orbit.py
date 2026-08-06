@@ -10,10 +10,13 @@ from sgp4.api import Satrec, WGS72
 from astropy.coordinates import get_body, solar_system_ephemeris
 from astropy.time import Time
 from skyfield.api import Timescale, EarthSatellite, load
+from logger import Logger
 
 MU = 398600 # km^3/s^2
 
 class Orbit():
+    logger : Logger = None
+    config : dict = None
     DIsBI_I = np.zeros(3) # velocity vector in TEME coordinates
     sBI_I = np.zeros(3) # position vector in TEME coordinates
 
@@ -34,7 +37,7 @@ class Orbit():
     jd=np.float64(2461041.5000000) # 2026-01-01 00:00:00 UTC
     fr=np.float64(0.0)
 
-    sgp4_sat : Satrec = None
+    propagator : Satrec = None
 
     T_OI = np.eye(3) # inertial to orbit frame DCM
 
@@ -49,14 +52,16 @@ class Orbit():
     mean_anomaly = 0.0
     enable = True
 
-    def __init__(self, config):
-        if config['simulation']['tuning'] and config['satellite']['mode'] == "ref_pointing":
+    def __init__(self, config, logger):
+        self.logger = logger
+        self.config = config
+        if self.config['simulation']['tuning'] and self.config['satellite']['mode'] == "ref_pointing":
             self.enable = False
-        altitude = config['orbit']['altitude_km']
-        if 't_sample' in config['orbit']:
-            self.t_sample = config['orbit']['t_sample']
-        if 'jd_start' in config['orbit']:
-            self.jd = np.float64(config['orbit']['jd_start'])
+        altitude = self.config['orbit']['altitude_km']
+        if 't_sample' in self.config['orbit']:
+            self.t_sample = self.config['orbit']['t_sample']
+        if 'jd_start' in self.config['orbit']:
+            self.jd = np.float64(self.config['orbit']['jd_start'])
         
         if altitude > 100:
             self.altitude = altitude
@@ -82,23 +87,22 @@ class Orbit():
 
         self.arg_perigee = 0
 
-        if 'mean_anomaly_deg' in config['orbit']:
-            self.mean_anomaly = config['orbit']['mean_anomaly_deg'] * np.pi / 180
+        if 'mean_anomaly_deg' in self.config['orbit']:
+            self.mean_anomaly = self.config['orbit']['mean_anomaly_deg'] * np.pi / 180
 
-        self.sgp4_sat = Satrec()
+        self.propagator = Satrec()
 
-        if config['simulation']['verbose']:
-            print("Initializing SGP4 satellite with the following parameters:")
-            print("  Altitude:", self.altitude, "km")
-            print("  Radius:", self.radius, "km")
-            print("  JD:", self.jd)
-            print("  RAAN:", self.RAAN)
-            print("  Arg Perigee:", self.arg_perigee)
-            print("  Inclination:", self.inclination)
-            print("  Mean Anomaly:", self.mean_anomaly)
-            print("  Period:", self.period/60, "minutes")
+        self.logger.log(f"Initializing SGP4 satellite with the following parameters:", to_results_file=True, to_console=False)
+        self.logger.log(f"  Altitude: {self.altitude} km", to_results_file=True, to_console=False)
+        self.logger.log(f"  Radius: {self.radius} km", to_results_file=True, to_console=False)
+        self.logger.log(f"  JD: {self.jd}", to_results_file=True, to_console=False)
+        self.logger.log(f"  RAAN: {self.RAAN}", to_results_file=True, to_console=False)
+        self.logger.log(f"  Arg Perigee: {self.arg_perigee}", to_results_file=True, to_console=False)
+        self.logger.log(f"  Inclination: {self.inclination}", to_results_file=True, to_console=False)
+        self.logger.log(f"  Mean Anomaly: {self.mean_anomaly}", to_results_file=True, to_console=False)
+        self.logger.log(f"  Period: {self.period/60} minutes", to_results_file=True, to_console=False)
 
-        self.sgp4_sat.sgp4init(
+        self.propagator.sgp4init(
             WGS72,
             'i',
             1,
@@ -127,11 +131,11 @@ class Orbit():
 
         self.fr = t_runtime/86400
 
-        error, sBT_T , DTsBT_T = self.sgp4_sat.sgp4(self.jd, self.fr) # sBT_T refers to body position in TEME frame, DTsBT_T refers to velocity in TEME frame
+        error, sBT_T , DTsBT_T = self.propagator.sgp4(self.jd, self.fr) # sBT_T refers to body position in TEME frame, DTsBT_T refers to velocity in TEME frame
 
         # Use astropy or manual rotation matrix for TEME->ICRF conversion
         # For now, keeping in TEME as exact conversion requires additional ephemeris data
-        # error, sBT_T , DTsBT_T = self.sgp4_sat.sgp4(self.jd, 0.0)
+        # error, sBT_T , DTsBT_T = self.propagator.sgp4(self.jd, 0.0)
         if error != 0:
             raise Exception("SGP4 propagation error")
         self.sBI_I = np.array(sBT_T)  # km

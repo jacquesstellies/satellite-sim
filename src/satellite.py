@@ -4,7 +4,6 @@ from magt import MagtModule
 import my_utils as my_utils
 import my_globals
 
-from body import Body
 from controller import Controller
 from fault import Fault, FaultModule
 from wheels import WheelModule
@@ -18,8 +17,9 @@ class Face():
     area = 0
     norm_vec = np.zeros(3)
     
-class Satellite(Body):
-    wheel_offset = 0 # offset of wheel center of mass from edge of device
+class Satellite():
+    M_inertia : np.ndarray = np.zeros((3,3))
+    M_inertia_inv : np.ndarray = np.zeros((3,3))
 
     controller : Controller = None
     observer_module : ObserverModule = None
@@ -57,20 +57,11 @@ class Satellite(Body):
 
     config = None
     def __init__(self, wheel_module : WheelModule, controller : Controller, observer_module : ObserverModule,
-                 fault_module : FaultModule, magt_module : MagtModule, logger, wheel_offset = 0, orbit: Orbit = None, config=None):
+                 fault_module : FaultModule, magt_module : MagtModule, logger, orbit: Orbit = None, config=None):
         self.mode = config['satellite']['mode']
         
         self.config = config
         self.wheel_module = wheel_module
-        if wheel_module.config == "standard":
-            self.wheel_module.wheels[0].position[0] = self.dimensions['x']-config
-            self.wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
-            self.wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
-        # if wheel_module.config == "pyramid":
-        #     self.wheel_module.wheels[0].position[0] = self.dimensions['x']-wheel_offset
-        #     self.wheel_module.wheels[1].position[1] = self.dimensions['y']-wheel_offset
-        #     self.wheel_module.wheels[2].position[2] = self.dimensions['z']-wheel_offset
-        #     self.wheel_module.wheels[3].position[0] = self.dimensions['x']-wheel_offset
         self.controller = controller
         self.observer_module = observer_module
         self.logger = logger
@@ -81,17 +72,15 @@ class Satellite(Body):
         
         self.dimensions, self.mass = config['satellite']['dimensions'], config['satellite']['mass']
 
-        if self.config['satellite']['inertia_override']:
-            M_inertia = np.array(config['satellite']['M_Inertia'])
-            if M_inertia.shape == (3,3):
-                self.M_inertia = M_inertia
-            elif M_inertia.shape == (3,):
-                self.M_inertia = np.diag(M_inertia)
-            else:
-                raise Exception("inertia override must be 3x3 or 3x1 matrix")
-            self.calc_M_inertia_inv()
+        M_inertia = np.array(config['satellite']['M_Inertia'])
+        if M_inertia.shape == (3,3):
+            self.M_inertia = M_inertia
+        elif M_inertia.shape == (3,):
+            self.M_inertia = np.diag(M_inertia)
         else:
-            self.calc_M_inertia()
+            raise Exception("inertia override must be 3x3 or 3x1 matrix")
+        self.M_inertia_inv = np.linalg.inv(self.M_inertia)
+
         self.delta_inertia_frac = config['satellite'].get('delta_inertia_frac', 0.0)
         self.delta_inertia_freq = np.array(config['satellite'].get('delta_inertia_freq', [0.1, 0.2, 0.3]))
         self.disturbances = Disturbances(self.orbit, config)
@@ -139,9 +128,13 @@ class Satellite(Body):
                         self.q_RI_series.append(np.quaternion(q_series[i][3], q_series[i][0], q_series[i][1], q_series[i][2])) # check if valid quaternion
                     self.t_ref_series = t_ref_series
                 else:
-                    raise(Exception("t_ref_series and ref_q_series must be the same length"))
+                    raise(Exception("t_ref_series and ref_q_series must be the same length, got t_series {} and q_series {}".format(len(t_ref_series), len(q_series))))
+
+                if config['simulation']['duration'] < self.t_ref_series[-1]:
+                    raise(Exception("simulation duration must be longer than last time in t_ref_series"))
             else:
                 raise(Exception("no reference angle commanded"))
+            
         else:
             self.q_RI = np.quaternion(1,0,0,0)
         
@@ -149,8 +142,9 @@ class Satellite(Body):
 
         self.next_t_ref_update_interval = config['controller']['t_sample']
 
-        self.sinusoidal_ref_amplitude = np.array(config['satellite']['sinusoidal_ref_amplitude_deg']) * my_utils.DEG_TO_RAD
-        self.sinusoidal_ref_frequency = np.array(config['satellite']['sinusoidal_ref_frequency'])
+        if self.mode == "sinusoidal":
+            self.sinusoidal_ref_amplitude = np.array(config['satellite']['sinusoidal_ref_amplitude_deg']) * my_utils.DEG_TO_RAD
+            self.sinusoidal_ref_frequency = np.array(config['satellite']['sinusoidal_ref_frequency'])
         
     def calc_face_properties(self):
         model = self.config['satellite']['dimensions']['model']
@@ -203,22 +197,9 @@ class Satellite(Body):
         M_inertia[2][2] = 1/12*self.mass*(pow(self.dimensions['x'],2)+pow(self.dimensions['y'],2))
         return M_inertia
 
-    def calc_M_inertia_peri(self):
-        M_inertia = np.zeros((3,3))
-        if self.wheel_module.wheels is not None:
-            M_inertia_indv_wheels = 0
-            M_inertia_point_mass_wheels = 0
-
-            for wheel in self.wheel_module.wheels:
-                M_inertia_indv_wheels += wheel.M_inertia
-                M_inertia_point_mass_wheels += my_utils.calc_M_inertia_point_mass(wheel.position, self.mass)
-
-        return M_inertia
-
     def calc_M_inertia(self):
-        self.M_inertia = self.calc_M_inertia_body() #+ self.calc_M_inertia_peri()
-
-        self.calc_M_inertia_inv()
+        self.M_inertia = self.calc_M_inertia_body()
+        self.M_inertia_inv = np.linalg.inv(self.M_inertia)
 
     def update_mode(self):
         mode_prev = self.mode
@@ -437,7 +418,7 @@ class Satellite(Body):
         self.fault_module.update(t)
         self.update_FDIR(t)
 
-        self.logger.log_data(t)
+        self.logger.store_data(t)
 
         return np.hstack([self.dw_BI_B, dq_BI, control_power, self.wheel_module.dw_wheels])
 

@@ -112,7 +112,7 @@ ref_t_series=[ 0, 30,]
 wheels_control_enable = true
 mass = 12
 M_Inertia = [ [ 500.0, 0.0, 0.0,], [ 0.0, 500.0, 0.0,], [ 0.0, 0.0, 500.0,], ]
-inertia_override = true
+
 
 [orbit]
 altitude_km = 500 # km
