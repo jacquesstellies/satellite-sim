@@ -80,9 +80,17 @@ class NadafiController:
         if sub_type == 'Nadafi_FNDO':
             self.L11 = np.array(Nadafi_config['L11'])
             self.L22 = np.array(Nadafi_config['L22'])
+            self.L = np.array([[self.L11, 0], [0, self.L22]])
+            # L = det_config.get('L', 10.0)
+            # self.L = np.array(L if hasattr(L, '__len__') else [L] * 3, dtype=float)
 
             self.kappa_0 = Nadafi_config['kappa_0']
             self.kappa_1 = Nadafi_config['kappa_1']
+            self.bl_eps = Nadafi_config.get('bl_eps', 1e-2)
+            chi_0_gain = self.kappa_0 * np.sqrt(self.L.max() * self.bl_eps) * self.t_sample / self.bl_eps
+            if chi_0_gain > 1.5:
+                print(f"WARNING: FNDO detector chi_0 boundary-layer gain {chi_0_gain:.2f} > 1.5, "
+                    "reduce kappa_0*sqrt(L) or increase bl_eps")
 
         if sub_type == 'Nadafi_MFNDO':
             self.L11 = np.array(Nadafi_config['L11'])
@@ -187,14 +195,28 @@ class NadafiController:
 
         L = np.array([[self.L11, 0], [0, self.L22]])
 
-        v_temp = np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r))
-        self.v_0 = -self.kappa_0*np.diag([v_temp[0,0], v_temp[1,0]])@np.sign(self.chi_0 - w_err_r) + self.chi_1
-        u_wheels_prev =  my_utils.col_vec(u_wheels_prev)
-        dchi_0 = self.v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F
-        dchi_1 = -self.kappa_1 * L @ np.sign(self.chi_1 - self.v_0)
+        # v_temp = np.sqrt(L)@np.sqrt(np.abs(self.chi_0 - w_err_r))
+        # self.v_0 = -self.kappa_0*np.diag([v_temp[0,0], v_temp[1,0]])@np.sign(self.chi_0 - w_err_r) + self.chi_1
+        # u_wheels_prev =  my_utils.col_vec(u_wheels_prev)
+        # dchi_0 = self.v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F
+        # dchi_1 = -self.kappa_1 * L @ np.sign(self.chi_1 - self.v_0)
 
-        self.chi_0 = self.chi_0 + dchi_0*self.t_sample
-        self.chi_1 = self.chi_1 + dchi_1*self.t_sample
+        # self.chi_0 = self.chi_0 + dchi_0*self.t_sample
+        # self.chi_1 = self.chi_1 + dchi_1*self.t_sample
+
+        e0 = self.chi_0 - w_r
+        sat_e0 = np.clip(e0 / self.bl_eps, -1.0, 1.0)
+        v_0 = -self.kappa_0 * np.sqrt(self.L * np.abs(e0)) * sat_e0 + self.chi_1
+        self.chi_0 = self.chi_0 + v_0 * self.t_sample
+
+        # semi-implicit (Acary-Brogliato) update of chi_1 -> v_0: explicit Euler
+        # is unstable whenever kappa_1*L*dt > bl_eps and sawtooths at +-kappa_1*L*dt
+        g = self.kappa_1 * self.L * self.t_sample
+        z = self.chi_1 - v_0
+        z_new = np.where(np.abs(z) >= self.bl_eps + g,
+                         z - g * np.sign(z),
+                         z * self.bl_eps / (self.bl_eps + g))
+        self.chi_1 = v_0 + z_new
 
         self.term_1 = dphi@Aq@(self.Z + phi)
         self.term_2 = (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T
