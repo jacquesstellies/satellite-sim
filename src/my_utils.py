@@ -348,80 +348,123 @@ def angle_vec(v1: np.array, v2: np.array) -> float:
 # @param rows: List of tuples, each containing (row_name, [axes], label)
 # @param cols: Number of columns in the plot
 # @param results_data: Dictionary containing data to plot
-def create_plots_combined(rows, cols, results_data, config=None, LOG_FILE_NAME=None, type='line', x_axis=None):
-    if os.path.exists(fr"../data_logs/{LOG_FILE_NAME}") is False:
-        os.mkdir(fr"../data_logs/{LOG_FILE_NAME}")
-
-    fig, ax = plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
-
-    ax_as_np_array= np.array(ax)
-    plots_axes = ax_as_np_array.flatten()
-    for row_idx, row in enumerate(rows):
-        row_name, axes, label = row
-        current_plot : plt.Axes = plots_axes[row_idx-1]
-        if axes is None:
-            axes = ['none']
-        for axis in axes:
-            if axis != 'none': 
-                name = row_name + "_" + axis
-            else: 
-                axis = None
-                name = row_name
-            if type == 'line':
-                try:
-                    current_plot.plot(results_data['time'], results_data[name], label=axis)
-                except KeyError:
-                    raise Exception(f"Warning: {name} not found in results_data")
-                except Exception as e:
-                    raise Exception(f"Error plotting {name}: {e}")
-            elif type == 'scatter':
-                if x_axis is None:
-                    raise Exception("x_axis must be provided for scatter plot")
-                current_plot.scatter(x_axis, results_data[name], label=axis)
-
-        current_plot.set_xlabel('time (s)')
-        current_plot.set_ylabel(label)
-        if current_plot.get_legend_handles_labels()[0] != []:
-            current_plot.legend()
-
-        plt.subplots_adjust(wspace=0.5, hspace=0.5)
-
-    plt.show()
-    if config is not None:
-        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-            fig.savefig(fr"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.pdf", bbox_inches='tight')
-
-def create_plots_separated(rows, results_data, config=None, display=False, LOG_FILE_NAME=None):
-
+def create_plots_separated(rows, results_data, config, LOG_FILE_NAME, file_name_append = ""):
     # Create separate figures if enabled in config
+    names = []
     for row in rows:
         row_name, axes, label = row
         fig_separate = plt.figure(figsize=(12,6))
         ax_separate = fig_separate.add_subplot(111)
-        if axes is None:
-            axes = ['none']
+        
         for axis in axes:
             if axis != 'none':
                 name = row_name + "_" + axis
             else:
                 axis = None
                 name = row_name
-            ax_separate.plot(results_data['time'], results_data[name], label=axis)
-        
-        ax_separate.set_xlabel('time (s)')
-        ax_separate.set_ylabel(label)
-        if ax_separate.get_legend_handles_labels()[0] != []:
-            ax_separate.legend()
-        
-        if display is True:
-            plt.title(f"{label} Plot")
-            plt.show()
+            try:
+                ax_separate.plot(results_data['time'], results_data[name], label=name)
+                names.append(name)
+            except Exception as e:
+                print(f"Error plotting {name}: {e}")
 
-        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-            if os.path.exists(fr"../data_logs/{LOG_FILE_NAME}") is False:
-                os.mkdir(fr"../data_logs/{LOG_FILE_NAME}")
-            if not os.path.exists(fr"../data_logs/{LOG_FILE_NAME}/graphs"):
-                os.mkdir(fr"../data_logs/{LOG_FILE_NAME}/graphs")
-            fig_separate.savefig(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}.pdf", bbox_inches='tight')
-        if display is False:
+        
+        ax_separate.set_xlabel('Time (s)')
+        ax_separate.set_ylabel(label)
+        ax_separate.grid(visible=True, axis='both')
+        if ax_separate.get_legend_handles_labels()[0] != []:
+            ax_separate.legend(loc='upper right')
+        
+        if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
+            if not os.path.exists(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs")):
+                os.mkdir(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs"))
+            fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}{file_name_append}.png"), bbox_inches='tight')
+        
+        if config['output']['separate_plots_display'] is False:
             plt.close(fig_separate)
+
+def create_plots_comparison(rows : list, label : str, graph_name: str, results_data : dict, config : dict, LOG_FILE_NAME : str , show : bool = False):
+    fig = plt.figure(figsize=(12,6))
+    ax = fig.add_subplot(111)
+    for row_idx, row in enumerate(rows):
+        row_name, axes = row
+        
+        for axis_idx, axis in enumerate(axes):
+            if axis != 'none':
+                name = row_name + "_" + axis
+            else:
+                axis = None
+                name = row_name
+            try:
+                ax.plot(results_data['time'], results_data[name], label=name, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
+                
+            except Exception as e:
+                print(f"Error plotting {name}: {e}")
+    ax.legend(loc='upper right')
+    ax.grid(visible=True, axis='both')
+    if show is True or config['output']['show_plots'] is True:
+        try:
+            plt.show()
+        except Exception as e:
+            print(f"Error showing plots: {e}")
+
+
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel(label)
+
+    if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
+        fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{graph_name}.png"), bbox_inches='tight')
+
+def create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME, type='line', x_axis=None):
+    fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
+
+    ax_as_np_array= np.array(ax)
+    plots_axes = ax_as_np_array.flatten()
+    for row_idx, row in enumerate(rows):
+        row_name, axes, label = row
+        current_plot : plt.Axes = plots_axes[row_idx-1]
+        for axis in axes:
+            if axis != 'none': 
+                name = row_name + "_" + axis
+            else: 
+                axis = None
+                name = row_name
+            try:
+                if type == 'line':
+                    current_plot.plot(results_data['time'], results_data[name], label=axis)
+                elif type == 'scatter':
+                    if x_axis is None:
+                        raise Exception("x_axis must be provided for scatter plot")
+                    current_plot.scatter(x_axis, results_data[name], label=axis)
+            except Exception as e:
+                print(f"Error plotting {name}: {e}")
+        current_plot.grid(visible=True, axis='both')
+        current_plot.set_xlabel('Time (s)')
+        current_plot.set_ylabel(label)
+        if current_plot.get_legend_handles_labels()[0] != []:
+            current_plot.legend()
+
+        plt.subplots_adjust(wspace=0.5, hspace=0.5)
+    if config['output']['show_plots'] is True:
+        try:
+            plt.show()
+        except Exception as e:
+            print(f"Error showing plots: {e}")
+
+    if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
+        fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.png"), bbox_inches='tight')
+
+def create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME):
+    fig = plt.figure(figsize=(8,8))
+    ax = fig.add_subplot(111, projection='3d')
+    try:
+        ax.plot(results_data['q_sat_x'], results_data['q_sat_y'], results_data['q_sat_z'], label='Satellite Quaternion Trajectory')
+        ax.set_xlabel('q_x')
+        ax.set_ylabel('q_y')
+        ax.set_zlabel('q_z')
+        ax.legend()
+    except Exception as e:
+        print(f"Error plotting 3D quaternion trajectory: {e}")
+    # plt.show()
+    if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
+        fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_quaternion_3D_trajectory.png"), bbox_inches='tight')
