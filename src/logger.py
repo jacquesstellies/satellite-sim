@@ -231,18 +231,21 @@ class Logger:
                 # for i, axis in enumerate(my_utils.xyz_axes):
                 #     self.results_data[f'control_theta_{axis}'].append(self.satellite.controller.theta[i])
                 self.next_timestamp += self.satellite.controller.t_sample
-    
+
+    log_results_file_path = ""
     def log(self, message, to_results_file=False, to_console=True):
         if self.config['simulation']['tuning']:
             return            
         if self.verbose and to_console:
             print(f"{message}")
         if to_results_file:
-            with open(fr'{self.log_folder_path}/{self.log_name}.log', 'a+') as file:
+            with open(fr'{self.log_results_file_path}', 'a+') as file:
                 file.write(f"{message}\n")
     
     def init_results_summary_file(self):
         if not os.path.exists(self.log_folder_path):
             os.makedirs(self.log_folder_path)
-        with open(fr'{self.log_folder_path}/{self.log_name}_results.log', 'w+') as file:
+        self.log_results_file_path = fr'{self.log_folder_path}/{self.log_name}_results.log'
+        with open(fr'{self.log_results_file_path}', 'w+') as file:
             file.write(f"Log file created at {datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}\n")
+    
