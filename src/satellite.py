@@ -1,3 +1,5 @@
+from cmath import tau
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 from magt import MagtModule
@@ -134,10 +136,21 @@ class Satellite():
                     raise(Exception("simulation duration must be longer than last time in t_ref_series"))
             else:
                 raise(Exception("no reference angle commanded"))
-            
+        if self.mode == "tracking":
+            q_series = self.config['satellite']['ref_q_series']   # each [x, y, z, w]
+            t_series = self.config['satellite']['ref_t_series']
+            rots = [Rotation.from_quat(q) for q in q_series]
+            self._tracking_keys_cache = (rots, np.array(t_series, dtype=float)) 
         else:
             self.q_RI = np.quaternion(1,0,0,0)
-        
+
+        # nominal_night: T_OI can step discretely between ref updates (e.g. LVLH frame
+        # singularities near the poles); jumps bigger than this are smoothed with a
+        # smootherstep SLERP over the given duration instead of applied instantly, since
+        # a stepped reference otherwise spikes the FNDO observer.
+        self.night_interp_threshold_deg = config['satellite'].get('nominal_night_interp_threshold_deg', 5.0)
+        self.night_interp_duration = config['satellite'].get('nominal_night_interp_duration', 90.0)
+
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
         self.next_t_ref_update_interval = config['controller']['t_sample']
@@ -221,6 +234,14 @@ class Satellite():
     init = True
     next_t_ref_update = 0.0
     next_t_ref_update_interval = None
+    last_q_RI_update_t = 0.0
+
+    # nominal_night reference-jump smoothing state (see update_ref_q)
+    _night_interp_active = False
+    _night_interp_t0 = 0.0
+    _night_interp_t1 = 0.0
+    _night_interp_rot0 = None
+    _night_interp_rot1 = None
     def update_ref_q(self, t):
         if t >= self.next_t_ref_update:
             self.next_t_ref_update = t + self.next_t_ref_update_interval
@@ -229,7 +250,10 @@ class Satellite():
         self.update_mode()
 
         if self.init and self.mode not in ("ref_pointing", "tracking"):
+            if self.mode == "nominal_night" or self.mode == "nominal_day":
+                self.q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
             self.w_RI_R = np.zeros(3)
+            self.last_q_RI_update_t = t
             self.init = False
             return
         if self.mode == "nominal_day":
@@ -242,22 +266,55 @@ class Satellite():
 
             # Reference (R) frame axes expressed in inertial (I): x=sun, z=nadir, y=z x x.
             # Rows of a passive DCM T_RI are the R-axes in I coords (v_R = T_RI v_I).
-            x_axis = self.orbit.nSB_I
-            z_axis = self.orbit.nIB_I
-            y_axis = my_utils.cross_product_M31M31(self.orbit.nIB_I, x_axis)
-            T_RI = np.row_stack([x_axis, y_axis, z_axis])
-            self.q_RI = my_utils.dcm_to_quat(T_RI)
-            self.w_RI_R = np.zeros(3)
-            self.dw_RI_R = np.zeros(3)
+            # x_axis = self.orbit.nSB_I
+            # z_axis = self.orbit.nIB_I
+            # y_axis = my_utils.cross_product_M31M31(self.orbit.nIB_I, x_axis)
+            # T_RI = np.row_stack([x_axis, y_axis, z_axis])
 
+            q_NB = my_utils.quat_from_vectors(np.array([0, 0, 1]), my_utils.rotate_vector_by_quaternion(self.orbit.nIB_I, self.q_BI))
+
+            # self.q_RI = my_utils.dcm_to_quat(T_RI)
+            dq = 2 * self.q_RI * q_RI_prev.inverse() / self.next_t_ref_update_interval
+            self.w_RI_R = np.array([dq.x, dq.y, dq.z])
+            w_RI_R_prev = self.w_RI_R
+            self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
         if self.mode == "nominal_night":
             # Nadir/LVLH pointing: reference frame R == orbit frame O, so T_RI = T_OI.
-            self.q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
-            # Orbital angular velocity w_OI is r x v / |r|^2 in inertial coords; the
-            # controller feedforward needs it resolved in the reference (orbit) frame.
-            wOI_I = my_utils.cross_product_M31M31(self.orbit.sBI_I, self.orbit.DIsBI_I) / np.linalg.norm(self.orbit.sBI_I)**2
-            self.w_RI_R = self.orbit.T_OI @ wOI_I
-            self.dw_RI_R = np.zeros(3)
+            # orbit.T_OI can step discretely between ref updates (e.g. LVLH frame
+            # singularities); feeding that step straight to the controller spikes the
+            # FNDO observer, so jumps bigger than night_interp_threshold_deg are smoothed
+            # with the same smootherstep SLERP "tracking" mode uses between waypoints,
+            # instead of being applied instantly.
+            new_q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
+            dt = 1e-3
+
+            if self._night_interp_active:
+                if t >= self._night_interp_t1:
+                    w_RI_R_prev = self.w_RI_R
+                    dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
+                    self.q_RI = new_q_RI
+                    self.w_RI_R = np.array([dq.x, dq.y, dq.z])
+                    self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
+                    self._night_interp_active = False
+                else:
+                    rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
+                    self._tracking_update_ref_project_smooth_interp(
+                        t, self._night_interp_t0, self._night_interp_t1,
+                        self._night_interp_rot0, rot1, dt)
+            else:
+                err_deg = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
+                if err_deg > self.night_interp_threshold_deg:
+                    print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg, t, self.night_interp_duration))
+                    self._night_interp_active = True
+                    self._night_interp_t0 = t
+                    self._night_interp_t1 = t + self.night_interp_duration
+                    self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                    self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
+                    self._tracking_update_ref_project_smooth_interp(
+                        t, self._night_interp_t0, self._night_interp_t1,
+                        self._night_interp_rot0, self._night_interp_rot1, dt)
+                else:
+                    self.q_RI = new_q_RI
 
         if self.mode == "ref_pointing":
             if self.init == True:
@@ -316,33 +373,55 @@ class Satellite():
             # Starts at ref_q_series[0]; set euler_init to match it for zero initial error.
             self.init = False
             dt = 1e-3
-            R0 = self._tracking_q_ref_at(t)
-            R_fwd = (R0.inv() * self._tracking_q_ref_at(t + dt)).as_rotvec() / dt
-            R_bwd = (self._tracking_q_ref_at(t - dt).inv() * R0).as_rotvec() / dt
-            self.q_RI  = my_utils.conv_Rotation_obj_to_numpy_q(R0)
-            self.w_RI_R  = 0.5 * (R_fwd + R_bwd)
-            self.dw_RI_R = (R_fwd - R_bwd) / dt
+            rots , times = self._tracking_keys_cache
+            if t <= times[0]:
+                self.q_RI = my_utils.conv_Rotation_obj_to_numpy_q(rots[0])
+                self.w_RI_R = np.zeros(3)
+                self.dw_RI_R = np.zeros(3)
+            elif t >= times[-1]:
+                self.q_RI = my_utils.conv_Rotation_obj_to_numpy_q(rots[-1])
+                self.w_RI_R = np.zeros(3)
+                self.dw_RI_R = np.zeros(3)
+            else:
+                i = self._tracking_find_time_index(t, times)
+                t_series_last = times[i]
+                t_series_next = times[i + 1]
+                rot1 = rots[i]
+                rot2 = rots[i + 1]
+                self._tracking_update_ref_project_smooth_interp(t, t_series_last, t_series_next, rot1, rot2, dt)
 
-    def _tracking_keys(self):
-        if self._tracking_keys_cache is None:
-            q_series = self.config['satellite']['ref_q_series']   # each [x, y, z, w]
-            t_series = self.config['satellite']['ref_t_series']
-            rots = [Rotation.from_quat(q) for q in q_series]
-            self._tracking_keys_cache = (rots, np.array(t_series, dtype=float))
-        return self._tracking_keys_cache
-
-    def _tracking_q_ref_at(self, tau):
-        rots, times = self._tracking_keys()
-        if tau <= times[0]:
-            return rots[0]
-        if tau >= times[-1]:
-            return rots[-1]
+    def _tracking_find_time_index(self, tau, times):
         i = int(np.searchsorted(times, tau) - 1)
         i = max(0, min(i, len(times) - 2))
-        s = (tau - times[i]) / (times[i + 1] - times[i])
+        return i
+
+    def _tracking_q_ref_at(self, tau, t1, t2, rot1, rot2):
+        s = (tau - t1) / (t2 - t1)
         s = s*s*s*(s*(s*6 - 15) + 10)          # smootherstep: C2, zero rate/accel at waypoints
-        rel = (rots[i].inv() * rots[i + 1]).as_rotvec()
-        return rots[i] * Rotation.from_rotvec(s * rel)
+        rel = (rot1.inv() * rot2).as_rotvec()
+        return rot1 * Rotation.from_rotvec(s * rel)
+
+    def _tracking_finite_difference(self, tau, dt, t1, t2, rot1, rot2):
+        R0 = self._tracking_q_ref_at(tau, t1, t2, rot1, rot2)
+        R_fwd = (R0.inv() * self._tracking_q_ref_at(tau + dt, t1, t2, rot1, rot2)).as_rotvec() / dt
+        R_bwd = (self._tracking_q_ref_at(tau - dt, t1, t2, rot1, rot2).inv() * R0).as_rotvec() / dt
+        return R_bwd, R_fwd
+
+    def _tracking_update_ref_project_smooth_interp(self, t, t_series_last, t_series_next, rot1, rot2, dt = 1e-3):
+        """
+        Update the reference quaternion and its derivatives using smooth interpolation between waypoints.
+        - t: current time
+        - t_series_last: time of the last waypoint
+        - t_series_next: time of the next waypoint
+        - rot1: Rotation object of the last waypoint
+        - rot2: Rotation object of the next waypoint
+        - dt: time step for finite difference approximation of derivatives
+        """
+        R0 = self._tracking_q_ref_at(t, t_series_last, t_series_next, rot1, rot2)
+        R_bwd, R_fwd = self._tracking_finite_difference(t, dt, t_series_last, t_series_next, rot1, rot2)
+        self.q_RI  = my_utils.conv_Rotation_obj_to_numpy_q(R0)
+        self.w_RI_R  = 0.5 * (R_fwd + R_bwd)
+        self.dw_RI_R = (R_fwd - R_bwd) / dt
 
     def calc_delta_M_inertia(self, t):
         # Sinusoidal parametric uncertainty Delta J = frac * diag(J) .* sin(freq*t), applied
@@ -367,6 +446,8 @@ class Satellite():
         w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
         # Passive body DCM T_BI: v_B = T_BI @ v_I  (used by the disturbance models).
         T_BI = my_utils.quat_to_dcm(self.q_BI)
+
+        self.orbit.calc_orbit_state(t)
 
         self.update_ref_q(t)
         ### Calculate controller output
