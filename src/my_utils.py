@@ -228,6 +228,20 @@ def quaternion_multiply(q1 : np.array, q2 : np.array):
     # return np.quaternion(w, qv[0], qv[1], qv[2])
     return np.array([qv[0], qv[1], qv[2], w])
 
+def quat_from_vectors(u, v):
+
+    d = np.dot(u, v)
+    w = cross_product_M31M31(u, v)
+
+    qv = d + math.sqrt(d * d + np.dot(w, w))
+    return np.quaternion(w, qv[0], qv[1], qv[2]).normalize()
+
+def rotate_vector_by_quaternion(v : np.array, q : np.quaternion):
+    q_conj = q.inverse()
+    v_quat = np.quaternion(0, v[0], v[1], v[2])
+    rotated_v_quat = q * v_quat * q_conj
+    return np.array([rotated_v_quat.x, rotated_v_quat.y, rotated_v_quat.z])
+
 def get_quaternion_error_bong_wie(qc : np.quaternion, qd : np.quaternion):
 
     qe = np.array([[qc.w, qc.z, -1*qc.y, -1*qc.x],
