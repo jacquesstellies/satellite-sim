@@ -381,8 +381,10 @@ class Satellite():
         # Body-frame attitude error q_RB (rotation B->R); vector part resolved in B.
         q_RB =  my_utils.quat_error(self.q_RI, self.q_BI)
         qv_RB = np.array([q_RB.x, q_RB.y, q_RB.z])
-        
-        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t)
+
+        # Orbit first so B_I is current for magnetorquers and residual dipole.
+        self.orbit.calc_orbit_state(t)
+        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI)
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
         if self.observer_module.enable is True:
@@ -392,8 +394,6 @@ class Satellite():
             self.f_wheels = self.fault_module.E@self.T_ctr_wheels + self.fault_module.u_a
             self.E = self.fault_module.E
         #### Calculate state rates for satellite various subsystems
-
-        self.orbit.calc_orbit_state(t)
 
         self.T_dist = self.disturbances.calc_torque(self, T_BI, t)
         

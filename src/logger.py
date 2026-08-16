@@ -61,6 +61,8 @@ class Logger:
         
         for i in my_utils.xyz_axes:
             self.results_data[f'T_magt_{i}'] = []
+            self.results_data[f'm_magt_{i}'] = []
+            self.results_data[f'B_eci_{i}'] = []
             self.results_data[f's_sat_eci_{i}'] = []
             self.results_data[f'v_sat_eci_{i}'] = []
             self.results_data[f'n_sun_{i}'] = []
@@ -125,6 +127,8 @@ class Logger:
                     self.results_data['T_sat_'+ axis].append(self.satellite.T_ctr_vec[i])
                     self.results_data['T_dist_' + axis].append(self.satellite.T_dist[i])
                     self.results_data['T_magt_' + axis].append(self.satellite.magt_module.T[i])
+                    self.results_data['m_magt_' + axis].append(self.satellite.magt_module.m[i])
+                    self.results_data['B_eci_' + axis].append(self.satellite.orbit.B_I[i])
                     self.results_data['s_sat_eci_' + axis].append(self.satellite.orbit.sBI_I[i])
                     self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.DIsBI_I[i])
                     self.results_data['n_sun_' + axis].append(self.satellite.orbit.nSB_I[i])

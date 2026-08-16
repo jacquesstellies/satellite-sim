@@ -14,6 +14,13 @@ from logger import Logger
 
 MU = 398600 # km^3/s^2
 
+# IGRF-13 (2020.0) dipole term. Gauss coefficients in nT; reference radius in km.
+# Dipole field in ECEF: B = (a/r)^3 [3 (m · r̂) r̂ - m], m = [g11, h11, g10].
+IGRF_A_KM = 6371.2
+IGRF_G10_NT = -29404.8
+IGRF_G11_NT = -1450.9
+IGRF_H11_NT = 4652.5
+
 class Orbit():
     logger : Logger = None
     config : dict = None
@@ -40,6 +47,7 @@ class Orbit():
     propagator : Satrec = None
 
     T_OI = np.eye(3) # inertial to orbit frame DCM
+    B_I = np.zeros(3) # Earth magnetic field in inertial (TEME) frame [T]
 
     # rSB_I = np.zeros(3) # sun vector in inertial frame
     # rIB_I = np.zeros(3) # orbit vector in inertial frame
@@ -163,6 +171,8 @@ class Orbit():
         self.latitude, self.longitude = self.get_lat_lon(self.sBI_I, self.jd + self.fr)
         self.Dlat = (self.latitude - lat_prev)/self.t_sample
         self.Dlong = (self.longditude - long_prev)/self.t_sample
+
+        self.calc_magnetic_field()
 
 
 
@@ -316,6 +326,46 @@ class Orbit():
             return True
 
         return False
+
+    @staticmethod
+    def _gmst_rad(jd: float) -> float:
+        """Greenwich mean sidereal time [rad]. Vallado 4th ed., approx. Eq. 3-47."""
+        d_ut1 = jd - my_utils.J2000
+        T = d_ut1 / my_utils.CENT2DAY
+        gmst_deg = (280.46061837
+                    + 360.98564736629 * d_ut1
+                    + 0.000387933 * T**2
+                    - T**3 / 38710000.0) % 360.0
+        return float(np.radians(gmst_deg))
+
+    def calc_magnetic_field(self):
+        """Tilted-dipole Earth B-field in the inertial (TEME) frame [T].
+
+        Uses the IGRF-13 (2020.0) dipole Gauss coefficients. TEME is rotated to
+        ECEF by GMST (polar motion neglected), the dipole is evaluated there,
+        then B is rotated back to TEME. Shared by magnetorquers and residual
+        dipole disturbance torque.
+        """
+        r_I = self.sBI_I  # km
+        r = float(np.linalg.norm(r_I))
+        if r < 1.0:
+            self.B_I = np.zeros(3)
+            return
+
+        theta = self._gmst_rad(self.jd + self.fr)
+        c, s = np.cos(theta), np.sin(theta)
+        # TEME -> ECEF (PEF): R3(GMST)
+        r_ecef = np.array([c * r_I[0] + s * r_I[1],
+                           -s * r_I[0] + c * r_I[1],
+                           r_I[2]])
+        r_hat = r_ecef / r
+        m_ecef = np.array([IGRF_G11_NT, IGRF_H11_NT, IGRF_G10_NT])  # nT
+        B_ecef_nT = (IGRF_A_KM / r)**3 * (3.0 * np.dot(m_ecef, r_hat) * r_hat - m_ecef)
+        # ECEF -> TEME: R3(-GMST)
+        B_I_nT = np.array([c * B_ecef_nT[0] - s * B_ecef_nT[1],
+                           s * B_ecef_nT[0] + c * B_ecef_nT[1],
+                           B_ecef_nT[2]])
+        self.B_I = B_I_nT * 1e-9  # Tesla
         
 class Disturbances():
     orbit : Orbit = None
@@ -336,7 +386,7 @@ class Disturbances():
         self.sigma_n = 0.8
         self.sigma_t = 0.8
         
-        self.dipole_vec = ([0,0,1])
+        self.dipole_vec = np.array(config['disturbances'].get('dipole_Am2', [0.0, 0.0, 0.0]), dtype=float)
         self.t_sample = orbit.t_sample
 
         W_s = 1361 # W/m^2 at 1 AU
@@ -417,17 +467,19 @@ class Disturbances():
         return T_solar
 
 
-    # def calc_mag_torque(self, satellite, dcm):
-    #     m = 
-    #     B = self.orbit.calc_magnetic_field(satellite, dcm)
-    #     T_mag = np.cross(m, B)
-    #     return T_mag
+    def calc_residual_dipole_torque(self, T_BI):
+        """Residual body-fixed dipole disturbance: τ = m × B_B [N.m]."""
+        if not np.any(self.dipole_vec):
+            return np.zeros(3)
+        B_B = T_BI @ self.orbit.B_I
+        return my_utils.cross_product_M31M31(self.dipole_vec, B_B)
 
     def calc_torque_realistic(self, satellite, T_BI, t):
         T_aero = self.calc_aero_torque(satellite, T_BI)
         T_solar = self.calc_solar_radiation_pressure_torque(satellite, T_BI)
         T_grav = self.calc_grav_torque(satellite, T_BI)
-        T_dist = T_aero + T_solar + T_grav
+        T_mag = self.calc_residual_dipole_torque(T_BI)
+        T_dist = T_aero + T_solar + T_grav + T_mag
         return T_dist
 
     t_sample_next = 0.0

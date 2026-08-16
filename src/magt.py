@@ -2,42 +2,57 @@ import numpy as np
 from orbit import Orbit
 import my_utils
 
-EARTH_MAG_DIPOLE = 7.96e15
-
 class MagtModule():
     config : dict = None
     orbit : Orbit = None
     T = np.zeros(3)
+    m = np.zeros(3)
+    B_B = np.zeros(3)
     mode = None
 
-    B_field = np.zeros(3)
     def __init__(self, config, orbit):
         self.config = config
         self.orbit = orbit
-        self.enable = self.config['magt']['enable']
-        if self.config['magt']['enable']:
-            self.mode = self.config['magt']['mode']
-        
-    
-    def calc_B_field(self, t):
-        # Placeholder for magnetic field calculation
-        # self.B_field = np.array([0.0, 0.0, 0.0])  # Replace with actual model
-        alpha = self.orbit.arg_perigee + self.orbit.true_anomaly
-        w_0 = 1/self.orbit.period
-        eta_m = w_0 * t % (2*np.pi)  # magnetic dipole rotation
-        xi_m = self.orbit.inclination - np.radians(17) # mag_field_inclination
-        self.B_field = EARTH_MAG_DIPOLE / (self.orbit.radius)**3 * np.array([np.cos(alpha-eta_m)*np.sin(xi_m),
-                                                                        np.cos(xi_m),
-                                                                        -2*np.sin(alpha-eta_m)*np.sin(xi_m)])
-    prev = 0
-    def calc_torque(self, q_err_vec, w_sat, H_sat, t):
+        magt_cfg = self.config['magt']
+        self.enable = magt_cfg['enable']
+        self.m_max = magt_cfg.get('mag_moment_max', 0.0)
+        self.t_sample = magt_cfg.get('t_sample', 0.0)
+        physical_cfg = magt_cfg.get('physical', {})
+        self.physical = bool(physical_cfg.get('enable', False)) if isinstance(physical_cfg, dict) else False
+        if self.enable:
+            self.mode = magt_cfg['mode']
+        self.T = np.zeros(3)
+        self.m = np.zeros(3)
+        self.B_B = np.zeros(3)
+        self.next_t_sample = 0.0
+        self.prev = 0
+
+    def _physical_torque(self, T_des, B_B):
+        """Map a desired torque onto the achievable magnetorquer set τ = m × B.
+
+        The unconstrained moment that realises the component of T_des perpendicular
+        to B is m = (B × T_des) / |B|². Each body axis is then saturated at
+        mag_moment_max [A.m²] and the physical torque is recomputed.
+        """
+        B2 = float(B_B @ B_B)
+        if B2 < 1e-24:
+            return np.zeros(3), np.zeros(3)
+        m = my_utils.cross_product_M31M31(B_B, T_des) / B2
+        m = my_utils.sat_vec(np.array(m, dtype=float, copy=True), self.m_max)
+        T = my_utils.cross_product_M31M31(m, B_B)
+        return T, m
+
+    def calc_torque(self, q_err_vec, w_sat, H_sat, t, T_BI=None):
         if not self.enable:
+            self.T = np.zeros(3)
+            self.m = np.zeros(3)
             return
-        ## Calculate magnetic torque
-        # self.calc_B_field(t)  # t should be passed appropriately
-        # m = np.ones(3)*self.config['magt']['mag_moment_max']
-        # T_magt = np.array([[0, self.B_field[2], -self.B_field[1]], [-self.B_field[2], 0, self.B_field[0]], [self.B_field[1], -self.B_field[0], 0]]) @ m
-        # T_magt[0], T_magt[1] = 0, 0
+        if self.physical and self.t_sample > 0.0 and t < self.next_t_sample:
+            return
+        if self.physical and self.t_sample > 0.0:
+            self.next_t_sample = t + self.t_sample
+
+        ## Calculate magnetic torque command (desired, possibly unphysical)
         match self.mode:
             case "z-axis_simple":
                 self.T = np.zeros(3)
@@ -45,12 +60,10 @@ class MagtModule():
                 self.T[2] = -1 * my_utils._sign(w_sat[2]) * k
                 self.T[2] = my_utils.low_pass_filter(self.T[2], self.prev, 0.5)
             case "momentum_dump_xyz":
-                m = np.ones(3)*self.config['magt']['mag_moment_max']
                 k = 1.0
                 self.T = -1 * my_utils.sat_vec(k*H_sat, 0.1)
                 self.T = my_utils.low_pass_filter(self.T, self.prev, 0.2)
             case "momentum_dump_xy_axis":
-                m = np.ones(3)*self.config['magt']['mag_moment_max']
                 k = 1.0
                 self.T = -1 * my_utils.sat_vec(k*H_sat, 0.1)
                 self.T = my_utils.low_pass_filter(self.T, self.prev, 0.2)
@@ -61,15 +74,11 @@ class MagtModule():
 
                 self.T = my_utils.sat_vec(km*H_sat, 0.01)
                 self.T[2] = -1 * my_utils._sign(q_err_vec[2]) * kz
-        # T_magt[2] = T_magt[2] * my_utils._sign(q_err[2]) * k
 
-        ## Testing Stuff
-        # T_magt = np.cross(m, self.B_field)
-        # T_magt = my_utils.mat_multiply_3x3_vec(np.array([[0, self.B_field[2], -self.B_field[1]], [-self.B_field[2], 0, self.B_field[0]], [self.B_field[1], -self.B_field[0], 0]]), m)
-        # T_magt = np.zeros(3)
-        # T_magt[2] = T_magt[2] * -1 * my_utils._sign(w_sat[2])
-        # for i in range(3):
-        #     T_magt[i] = T_magt[i] * -1 * my_utils._sign(w_sat[i])
-
-        # T_magt = np.zeros(3)
-        # T_magt[2] = 10 * 1e-3 * -1*my_utils._sign (w_sat[2])
+        if self.physical:
+            if T_BI is None:
+                raise ValueError("physical magnetorquer torque requires T_BI")
+            self.B_B = T_BI @ self.orbit.B_I
+            self.T, self.m = self._physical_torque(self.T, self.B_B)
+        else:
+            self.m = np.zeros(3)

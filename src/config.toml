@@ -7,7 +7,7 @@ test_mode_en = false
 test_duration = 3
 test_resolution = 1
 iterations = 1
-tuning = true
+tuning = false
 input_type="ref" # ref, ref_square, torque, sine, square
 log_enable = true
 verbose = true
@@ -94,15 +94,20 @@ max_torque = 0.2
 num_wheels = 3
 D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
 friction_coef = 0.000
-saturation_enable = false
+saturation_enable = true
 M_inertia = 0.05
 use_inertia = true
 
 [magt]
-mag_moment_max = 1000 # Am2
+mag_moment_max = 1000 # Am2, per-axis saturation used when [magt.physical] is enabled
 t_sample = 1.0
 enable = true
-mode = "momentum_dumping" # z-axis_simple, momentum_dumping, momentum_dump_w_z_axis_simple
+mode = "momentum_dump_xyz" # z-axis_simple, momentum_dump_xyz, momentum_dump_xy_axis, momentum_dump_w_z_axis_simple
+
+# When enabled, the mode output is a desired torque; commanded moment is
+# m = (B × T_des)/|B|² saturated at mag_moment_max, and applied torque is τ = m × B.
+[magt.physical]
+enable = false
 
 [faults]
 master_enable = false
@@ -160,8 +165,9 @@ t_sample = 0.1
 
 [disturbances]
 enable = true
-model = "Nadafi"
+model = "realistic"
 rho_s = 0.6 # specular reflectivity for SRP torque (aluminised Mylar)
+dipole_Am2 = [0.0, 0.0, 0.0] # residual magnetic moment in body frame; τ = m × B
 
 
 [output]
