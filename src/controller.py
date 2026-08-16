@@ -655,6 +655,7 @@ class Controller:
         self.u_wheels_prev = np.zeros(self.wheel_module.num_wheels)
 
         self.q_prev = np.quaternion(1, 0, 0, 0)
+        self.q_int_vec = np.zeros(3)
 
         self.sub_type = config['controller']['sub_type']
         self.e_d_prev = col_vec(np.zeros(2))
@@ -671,21 +672,25 @@ class Controller:
             self.zarourati_controller.satellite = satellite
 
     q_prev : np.quaternion = None
+    q_int_vec : np.ndarray = None
     def calc_pid_torque(self, q_error: np.quaternion, w : np.array, M_inertia, H_wheels, w_d):
-        K = np.diag(np.full(3,self.k))
-        C = np.diag(self.c)
-        
         q_error_vec = np.array([q_error.x, q_error.y, q_error.z])
-
-        q_int = q_error + (self.q_prev * self.t_sample)
-        self.q_prev = q_int
-        q_int_vec = np.array([q_int.x, q_int.y, q_int.z])
-        Hnet = M_inertia@(w) + H_wheels
+        self.q_int_vec = self.q_int_vec + q_error_vec * self.t_sample
         w_e = w - w_d
-        # return - K@q_error_vec - C@w #+ my_utils.cross_product_M31M31(w, Hnet)
 
-        return - self.config['controller']['kj']*M_inertia@q_error_vec + self.config['controller']['kd']*M_inertia@w_e + self.config['controller']['ki']*q_int_vec #+ my_utils.cross_product_M31M31(w, H_wheels)
-        # return my_utils.sat_norm(my_utils.sat_vec(self.config['controller']['kj']*M_inertia@q_error_vec, self.config['wheels']['max_torque']) - self.config['controller']['kd']*M_inertia@w) + self.config['controller']['ki']*q_int_vec + my_utils.cross_product_M31M31(w, Hnet)
+        kj = self.config['controller']['kj']
+        kd = self.config['controller']['kd']
+        ki = self.config['controller']['ki']
+        # Wheel-commanded body torque; satellite torque is -u (reaction).
+        # With q_RB kinematics qdot_v ~= -0.5 w, this yields
+        #   T_sat = J (kj q_v - kd w_e + ki int q_v)
+        # so pole placement from tune_pid.py applies:
+        #   kd = 2*zeta*wn + sigma
+        #   kj = 2*(wn^2 + 2*zeta*wn*sigma)
+        #   ki = 2*sigma*wn^2
+        return (-kj * M_inertia @ q_error_vec
+                + kd * M_inertia @ w_e
+                - ki * M_inertia @ self.q_int_vec)
     
     h = 0
 
