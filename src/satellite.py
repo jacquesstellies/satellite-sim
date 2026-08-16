@@ -149,7 +149,8 @@ class Satellite():
         # smootherstep SLERP over the given duration instead of applied instantly, since
         # a stepped reference otherwise spikes the FNDO observer.
         self.night_interp_threshold_deg = config['satellite'].get('nominal_night_interp_threshold_deg', 5.0)
-        self.night_interp_duration = config['satellite'].get('nominal_night_interp_duration', 90.0)
+        self.night_interp_duration = config['satellite'].get('nominal_night_interp_duration', 180.0)
+        self._night_interp_enabled = config['satellite'].get('nominal_night_interp_enabled', True)
 
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
@@ -237,6 +238,7 @@ class Satellite():
     last_q_RI_update_t = 0.0
 
     # nominal_night reference-jump smoothing state (see update_ref_q)
+    _night_interp_enabled = False
     _night_interp_active = False
     _night_interp_t0 = 0.0
     _night_interp_t1 = 0.0
@@ -287,34 +289,40 @@ class Satellite():
             # instead of being applied instantly.
             new_q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
             dt = 1e-3
-
-            if self._night_interp_active:
-                if t >= self._night_interp_t1:
-                    w_RI_R_prev = self.w_RI_R
-                    dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
-                    self.q_RI = new_q_RI
-                    self.w_RI_R = np.array([dq.x, dq.y, dq.z])
-                    self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
-                    self._night_interp_active = False
+            if self._night_interp_enabled:
+                if self._night_interp_active:
+                    if t >= self._night_interp_t1:
+                        w_RI_R_prev = self.w_RI_R
+                        dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
+                        self.q_RI = new_q_RI
+                        self.w_RI_R = np.array([dq.x, dq.y, dq.z])
+                        self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
+                        self._night_interp_active = False
+                    else:
+                        rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
+                        self._tracking_update_ref_project_smooth_interp(
+                            t, self._night_interp_t0, self._night_interp_t1,
+                            self._night_interp_rot0, rot1, dt)
                 else:
-                    rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
-                    self._tracking_update_ref_project_smooth_interp(
-                        t, self._night_interp_t0, self._night_interp_t1,
-                        self._night_interp_rot0, rot1, dt)
+                    err_deg = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
+                    if err_deg > self.night_interp_threshold_deg:
+                        print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg, t, self.night_interp_duration))
+                        self._night_interp_active = True
+                        self._night_interp_t0 = t
+                        self._night_interp_t1 = t + self.night_interp_duration
+                        self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                        self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
+                        self._tracking_update_ref_project_smooth_interp(
+                            t, self._night_interp_t0, self._night_interp_t1,
+                            self._night_interp_rot0, self._night_interp_rot1, dt)
+                    else:
+                        self.q_RI = new_q_RI
             else:
-                err_deg = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
-                if err_deg > self.night_interp_threshold_deg:
-                    print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg, t, self.night_interp_duration))
-                    self._night_interp_active = True
-                    self._night_interp_t0 = t
-                    self._night_interp_t1 = t + self.night_interp_duration
-                    self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
-                    self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
-                    self._tracking_update_ref_project_smooth_interp(
-                        t, self._night_interp_t0, self._night_interp_t1,
-                        self._night_interp_rot0, self._night_interp_rot1, dt)
-                else:
-                    self.q_RI = new_q_RI
+                w_RI_R_prev = self.w_RI_R
+                dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
+                self.q_RI = new_q_RI
+                self.w_RI_R = np.array([dq.x, dq.y, dq.z])
+                self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
 
         if self.mode == "ref_pointing":
             if self.init == True:
