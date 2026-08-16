@@ -848,6 +848,8 @@ def main():
                 results_plots.append(('w_sat_error', my_utils.xyz_axes, 'Angular Velocity Error (rad/s)'))
                 results_plots.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
                 results_plots.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
+                results_plots.append(('m_magt', my_utils.xyz_axes, 'Magnetorquer Moment (A.m^2)'))
+                results_plots.append(('B_eci', my_utils.xyz_axes, 'Magnetic Field ECI (T)'))
                 # results_plots.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
                 results_plots.append(('H_total', my_utils.xyz_axes, 'Total Angular Momentum (Nm*s)'))
 
