@@ -62,6 +62,10 @@ class Wheel():
         target_noise_db = 2
         target_noise_watts = 10 ** (target_noise_db / 10)
         self._noise_std = math.sqrt(target_noise_watts)
+        if self.config['wheels']['saturation_enable']:
+            self.T_max = self.config['wheels']['max_torque']
+        else:
+            self.T_max = float('inf')
 
         fd_inst = (False, 0)
     
@@ -85,7 +89,7 @@ class Wheel():
             u += fault.u_a[self.index]
 
         # Check torque limit exceeded
-        if abs(u) >= self.T_max and self.config['wheels']['saturation_enable']:
+        if abs(u) >= self.T_max:
             u = self.T_max*my_utils._sign(u)
 
             
