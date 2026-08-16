@@ -182,9 +182,10 @@ show_plots = false
 
 [output.visualizer]
 enable = false
-file_path = "/opt/satellite-visualizer/dist/telemetry.json"
-t_sample = 10.0
-# file_path = "/home/jacques/repos/masters/satellite-sim/telemetry-viewer.json"
+write_to_file = false
+file_path = "telemetry.json"
+publish = true
+t_sample = 1.0
 
 [satellite.dimensions]
 model="EOSSAT" # rectangular, EOSSAT

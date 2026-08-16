@@ -12,6 +12,7 @@ import requests
 import my_utils
 import my_globals
 
+import json
 import os
 import numpy as np
 from scipy.integrate import solve_ivp, cumulative_trapezoid
@@ -915,14 +916,19 @@ def main():
                     simulation.log_data_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH)
 
                 if config['output']['visualizer']['enable'] is True:
-                    json_data, results_df = viz.convert_results_df_to_json(simulation.results_df, config['output']['visualizer']['t_sample'])
-                    # open(config['output']['visualizer']['file_path'], "w").write(json_data)
-                    print("json_data: ", json_data)
-                    url = "http://localhost:3000/api/telemetry/update"
+                    visualizer_dict = viz.parse_results(simulation.results_df, config['output']['visualizer']['t_sample'])
+                    if config['output']['visualizer']['write_to_file'] is True:
+                        with open(config['output']['visualizer']['file_path'], "w") as f:
+                            json.dump(visualizer_dict, f, indent=2)
+                    if config['output']['visualizer']['publish'] is True:
+                        url = "http://localhost:3000/api/telemetry/update"
+                        response = requests.post(url, json=visualizer_dict)
+                        print(f"Visualizer publish: {response.status_code}")
+                        if not response.ok:
+                            print(response.text)
+                    else:
+                        print(json.dumps(visualizer_dict, indent=2))
 
-                    response = requests.post(url, json=json_data)
-                    print(response.status_code)
-                    print(response.text)
                     
             #-------------------------------------------------------------#
             ###################### Monte Carlo ############################
