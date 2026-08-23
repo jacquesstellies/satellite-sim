@@ -349,6 +349,22 @@ class ZarouratiController:
         self.xi_reset_on_maneuver = z.get('xi_reset_on_maneuver', False)
         self._w_ref_norm_prev = 0.0
 
+        # Excitation supervisor (opt-in): the paper's oscillator never switches off
+        # (||e_d|| = xi >= gamma2 > 0 for all t, Eq. 24), so during long dwells the controller
+        # keeps injecting rate commands after the unactuated axis has converged; with xi at its
+        # floor kappa1 is pegged (sign-only feedback) and e_u random-walks away. Freeze the
+        # excitation terms (kappa1 = kappa2 = 0, e_d treated as 0 => u_k = -k_a*e4*e_a, i.e.
+        # 2-axis stabilization) once |e_u|, |we_u| stay inside a dead-zone; re-arm with a fresh
+        # xi envelope (t0 = t) if e_u escapes the hysteresis bound. Mirrors the paper's own
+        # switching-logic philosophy (Eq. 36) applied to the excitation itself.
+        self.exc_deadzone_en = z.get('exc_deadzone_en', False)
+        self.exc_off_e_u = z.get('exc_off_e_u', 0.005)    # quaternion units (~0.6 deg)
+        self.exc_off_we_u = z.get('exc_off_we_u', 0.002)  # rad/s
+        self.exc_on_e_u = z.get('exc_on_e_u', 0.02)       # re-arm threshold (~2.3 deg)
+        self.exc_off_hold = z.get('exc_off_hold', 2.0)    # s inside dead-zone before freezing
+        self.exc_active = True
+        self._exc_quiet_t = 0.0
+
         # Reduced representation indices for #RW2 failure (Actuated: 1, 3)
         self.nf_idx = np.array([0, 2]) # actuated wheel indices
         self.f_idx = 1 # unactuated wheel index
@@ -466,6 +482,22 @@ class ZarouratiController:
             dkappa2 = float(np.clip(dkappa2, -km / self.t_sample, km / self.t_sample))
 
 
+            # Excitation supervisor (see __init__): freeze the oscillator terms once the
+            # unactuated axis has converged; re-arm with a fresh xi envelope if it escapes.
+            if self.exc_deadzone_en:
+                if self.exc_active:
+                    if abs(float(e_u)) < self.exc_off_e_u and abs(float(we_u)) < self.exc_off_we_u:
+                        self._exc_quiet_t += self.t_sample
+                        if self._exc_quiet_t > self.exc_off_hold:
+                            self.exc_active = False
+                    else:
+                        self._exc_quiet_t = 0.0
+                elif abs(float(e_u)) > self.exc_on_e_u:
+                    self.exc_active = True
+                    self._exc_quiet_t = 0.0
+                    self.t0 = t   # re-inflate xi so the re-engaged mechanism has authority
+
+
             Gamma = 0.5 * (k_a * e4 * e_u + e4 * self.kappa1 + we_u)
             Gamma = Gamma[0,0]
             # Auxiliary converge vector e_d follows the oscillator-like Eq. (24):
@@ -474,15 +506,24 @@ class ZarouratiController:
                 xi0 = self.gamma0 + self.gamma2
                 self.e_d = col_vec(np.array([xi0 / np.sqrt(2.0), xi0 / np.sqrt(2.0)]))
                 self.init = False
-            de_d = (dxi/self.xi)*self.e_d + Gamma * G1 @ self.e_d
+            if self.exc_active:
+                de_d = (dxi/self.xi)*self.e_d + Gamma * G1 @ self.e_d
 
-            assert(de_d.shape == (2,1))
-            self.e_d = self.e_d + de_d * self.t_sample
-            assert(self.e_d.shape == (2,1))
-            e_d_norm = np.linalg.norm(self.e_d)
-            if np.abs(e_d_norm - self.xi) > 1e-6:
-                self.e_d = (self.e_d / e_d_norm) * self.xi
-
+                assert(de_d.shape == (2,1))
+                self.e_d = self.e_d + de_d * self.t_sample
+                assert(self.e_d.shape == (2,1))
+                e_d_norm = np.linalg.norm(self.e_d)
+                if np.abs(e_d_norm - self.xi) > 1e-6:
+                    self.e_d = (self.e_d / e_d_norm) * self.xi
+                e_d = self.e_d
+            else:
+                # Frozen: excitation terms drop out of u_k/du_k and e_a_tilde -> -e_a, leaving
+                # the plain actuated-axes backstepping pair. self.e_d keeps its direction and is
+                # renormalised to the fresh xi on re-arm.
+                self.kappa1 = self.kappa2 = dkappa1 = dkappa2 = 0.0
+                de_d = col_vec(np.zeros(2))
+                e_d = col_vec(np.zeros(2))
+                
             # Virtual control input uk 
             self.u_k = -k_a * e4 * e_a + self.kappa1 * (G1 @ self.e_d) + self.kappa2 * self.e_d
             assert(self.u_k.shape == (2,1))
