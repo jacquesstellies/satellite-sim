@@ -306,11 +306,10 @@ class ZarouratiController:
     u_k = np.asmatrix(np.zeros(2)).T
     kappa1 = np.asmatrix(np.zeros(2)).T
     kappa2 = np.asmatrix(np.zeros(2)).T
-    f_idx = 1
     e_d = np.asmatrix(np.zeros(2)).T
 
-    nf_idx = np.array([0, 2]) # actuated wheel indices
-    f_idx = 1 # unactuated wheel index
+    nf_idx = np.array([0, 2]) # actuated axis indices (default: #RW2 faulty)
+    f_idx = 1                 # unactuated (faulty) axis index
 
     def __init__(self, config):
         self.config = config
@@ -365,9 +364,20 @@ class ZarouratiController:
         self.exc_active = True
         self._exc_quiet_t = 0.0
 
-        # Reduced representation indices for #RW2 failure (Actuated: 1, 3)
-        self.nf_idx = np.array([0, 2]) # actuated wheel indices
-        self.f_idx = 1 # unactuated wheel index
+        # Faulty (unactuated) axis, generalized to any single-wheel failure. The paper only
+        # writes out Eq. (22) for the #RW2 case (Remark 1); Fig. 11 tabulates how the other two
+        # cases relabel e_u/e_a but never gives their equations. Re-deriving (22) from the
+        # kinematics (11a) shows the only thing that changes between cases is the sign of the
+        # G1 cross-coupling terms, which is exactly minus the Levi-Civita symbol of the ordered
+        # triad (faulty, actuated_1, actuated_2): eps_{f,a1,a2}. Ordering the actuated pair as
+        # (f+2, f+1) mod 3 -- i.e. (previous axis, next axis) cyclically -- makes that triad an
+        # odd permutation of (1,2,3) for every f, so eps_{f,a1,a2} = -1 and the sign is always
+        # +1: Eq. (22)-(30) then hold verbatim for #RW1/#RW3 too, using this nf_idx ordering.
+        # (For f=1 this reduces to nf_idx=[0,2], the paper's own #RW2 case.)
+        self.f_idx = int(z.get('f_idx', 1))
+        if self.f_idx not in (0, 1, 2):
+            raise Exception(f"Zarourati f_idx must be 0, 1, or 2 (got {self.f_idx})")
+        self.nf_idx = np.array([(self.f_idx + 2) % 3, (self.f_idx + 1) % 3])
 
         if self.t0 is None:
             self.t0 = 0
@@ -413,7 +423,11 @@ class ZarouratiController:
             assert(we_a.shape == (2,1))
 
             
-            B = e4 * we_u + q_err.x * w_d[2] - q_err.z * w_d[0] # @TODO generalize for any self.f_idx
+            # Generalized paper Eq. (22)'s B for any faulty axis: with e_a ordered per the
+            # odd-permutation convention above (nf_idx = [(f+2)%3, (f+1)%3]), the transport
+            # term is e_{a1}*wd_{a2} - e_{a2}*wd_{a1} for every case (reduces to the paper's
+            # q_err.x*w_d[2] - q_err.z*w_d[0] when f_idx=1).
+            B = e4 * we_u + q_ev[self.nf_idx[0]] * w_d[self.nf_idx[1], 0] - q_ev[self.nf_idx[1]] * w_d[self.nf_idx[0], 0]
             de_u = 0.5 * (B + e_a.T @ G1 @ we_a)
 
             G2 = np.array([[e4, e_u], [-e_u, e4]])
@@ -432,6 +446,13 @@ class ZarouratiController:
                 if w_ref_norm > 1e-3 and self._w_ref_norm_prev <= 1e-3 and (t - self.t0) > 1.0:
                     self.t0 = t
                 self._w_ref_norm_prev = w_ref_norm
+
+            # gamma0 is re-measured (not continuously adapted) at each xi reset instant so xi(t)
+            # remains a fixed, known envelope for the duration of the maneuver.
+            if self.gamma0_scale_en and self._t0_scaled != self.t0:
+                self.gamma0 = float(np.clip(self.gamma0_margin * abs(float(e_u)), self.gamma0_base, self.gamma0_max))
+                self._t0_scaled = self.t0
+
             tau = t - self.t0
             self.xi = self.gamma0 * np.exp(-self.gamma1 * tau) + self.gamma2
             dxi = self.gamma0 * (-self.gamma1 * np.exp(-self.gamma1 * tau))
