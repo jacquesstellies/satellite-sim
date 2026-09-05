@@ -11,6 +11,7 @@ from fault import Fault, FaultModule
 from wheels import WheelModule
 from orbit import Disturbances, Orbit
 from observer import ObserverModule, FNDOFaultDetector
+from route_planner import yaw_maneuver_waypoints
 
 class DivergentRate(Exception):
     pass
@@ -152,6 +153,14 @@ class Satellite():
         self.night_interp_duration = config['satellite'].get('nominal_night_interp_duration', 180.0)
         self._night_interp_enabled = config['satellite'].get('nominal_night_interp_enabled', True)
 
+        # Yaw (z, unactuated under Nadafi_FNDO) can't be slewed to directly - when the
+        # error trigger fires, drive it via route_planner's roll/pitch "box" maneuver
+        # (geometric-phase yaw via the Lie bracket) instead of a naive SLERP, which would
+        # demand wz through the intermediate path just like the direct jump would.
+        self.night_yaw_maneuver_enable = config['satellite'].get('nominal_night_yaw_maneuver_enable', True)
+        self.night_yaw_max_tilt_deg = config['satellite'].get('nominal_night_yaw_max_tilt_deg', 20.0)
+        self.night_yaw_leg_duration = config['satellite'].get('nominal_night_yaw_leg_duration', 20.0)
+
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
         self.next_t_ref_update_interval = config['controller']['t_sample']
@@ -244,6 +253,11 @@ class Satellite():
     _night_interp_t1 = 0.0
     _night_interp_rot0 = None
     _night_interp_rot1 = None
+
+    # nominal_night yaw box-maneuver state (see update_ref_q)
+    _night_box_active = False
+    _night_box_rots = None
+    _night_box_times = None
     def update_ref_q(self, t):
         if t >= self.next_t_ref_update:
             self.next_t_ref_update = t + self.next_t_ref_update_interval
@@ -290,7 +304,18 @@ class Satellite():
             new_q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
             dt = 1e-3
             if self._night_interp_enabled:
-                if self._night_interp_active:
+                if self._night_box_active:
+                    if t >= self._night_box_times[-1]:
+                        self.q_RI = my_utils.conv_Rotation_obj_to_numpy_q(self._night_box_rots[-1])
+                        self.w_RI_R = np.zeros(3)
+                        self.dw_RI_R = np.zeros(3)
+                        self._night_box_active = False
+                    else:
+                        i = self._tracking_find_time_index(t, self._night_box_times)
+                        self._tracking_update_ref_project_smooth_interp(
+                            t, self._night_box_times[i], self._night_box_times[i + 1],
+                            self._night_box_rots[i], self._night_box_rots[i + 1], dt)
+                elif self._night_interp_active:
                     if t >= self._night_interp_t1:
                         w_RI_R_prev = self.w_RI_R
                         dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
@@ -304,17 +329,34 @@ class Satellite():
                             t, self._night_interp_t0, self._night_interp_t1,
                             self._night_interp_rot0, rot1, dt)
                 else:
-                    err_deg = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
-                    if err_deg > self.night_interp_threshold_deg:
-                        print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg, t, self.night_interp_duration))
-                        self._night_interp_active = True
-                        self._night_interp_t0 = t
-                        self._night_interp_t1 = t + self.night_interp_duration
-                        self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
-                        self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
-                        self._tracking_update_ref_project_smooth_interp(
-                            t, self._night_interp_t0, self._night_interp_t1,
-                            self._night_interp_rot0, self._night_interp_rot1, dt)
+                    # Yaw (z) component of the body->target error, as an angle (rad for a
+                    # pure-z rotation; approximate otherwise) - this is specifically the
+                    # unactuated-axis error, not the full 3-axis error.
+                    err_deg = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
+                    if abs(err_deg) > self.night_interp_threshold_deg:
+                        if self.night_yaw_maneuver_enable:
+                            q_series, info = yaw_maneuver_waypoints(err_deg, max_tilt_deg=self.night_yaw_max_tilt_deg)
+                            rot_start = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                            self._night_box_rots = [rot_start * Rotation.from_quat(q) for q in q_series]
+                            n_legs = len(self._night_box_rots) - 1
+                            self._night_box_times = t + self.night_yaw_leg_duration * np.arange(len(self._night_box_rots))
+                            self._night_box_active = True
+                            print("nominal_night: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
+                                  "box maneuver (tilt={:.1f} deg) over {:.1f}s".format(
+                                      err_deg, t, n_legs, info['tilt_deg'], self.night_yaw_leg_duration * n_legs))
+                            self._tracking_update_ref_project_smooth_interp(
+                                t, self._night_box_times[0], self._night_box_times[1],
+                                self._night_box_rots[0], self._night_box_rots[1], dt)
+                        else:
+                            print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg, t, self.night_interp_duration))
+                            self._night_interp_active = True
+                            self._night_interp_t0 = t
+                            self._night_interp_t1 = t + self.night_interp_duration
+                            self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                            self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
+                            self._tracking_update_ref_project_smooth_interp(
+                                t, self._night_interp_t0, self._night_interp_t1,
+                                self._night_interp_rot0, self._night_interp_rot1, dt)
                     else:
                         self.q_RI = new_q_RI
             else:
@@ -323,6 +365,7 @@ class Satellite():
                 self.q_RI = new_q_RI
                 self.w_RI_R = np.array([dq.x, dq.y, dq.z])
                 self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
+
 
         if self.mode == "ref_pointing":
             if self.init == True:
