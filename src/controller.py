@@ -204,19 +204,23 @@ class NadafiController:
         # self.chi_0 = self.chi_0 + dchi_0*self.t_sample
         # self.chi_1 = self.chi_1 + dchi_1*self.t_sample
 
-        e0 = self.chi_0 - w_r
+        L_r = my_utils.col_vec([self.L11, self.L22])
+
+        e0 = self.chi_0 - w_err_r
         sat_e0 = np.clip(e0 / self.bl_eps, -1.0, 1.0)
-        v_0 = -self.kappa_0 * np.sqrt(self.L * np.abs(e0)) * sat_e0 + self.chi_1
-        self.chi_0 = self.chi_0 + v_0 * self.t_sample
+        v_0 = -self.kappa_0 * np.multiply(np.sqrt(np.multiply(L_r, np.abs(e0))), sat_e0) + self.chi_1
+        u_wheels_prev = my_utils.col_vec(u_wheels_prev)
+        dchi_0 = v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F
+        self.chi_0 = self.chi_0 + dchi_0 * self.t_sample
 
         # semi-implicit (Acary-Brogliato) update of chi_1 -> v_0: explicit Euler
         # is unstable whenever kappa_1*L*dt > bl_eps and sawtooths at +-kappa_1*L*dt
-        g = self.kappa_1 * self.L * self.t_sample
+        g = np.multiply(self.kappa_1 * self.t_sample, L_r)
         z = self.chi_1 - v_0
         z_new = np.where(np.abs(z) >= self.bl_eps + g,
-                         z - g * np.sign(z),
-                         z * self.bl_eps / (self.bl_eps + g))
-        self.chi_1 = v_0 + z_new
+                         z - np.multiply(g, np.sign(z)),
+                         np.multiply(z, self.bl_eps / (self.bl_eps + g)))
+        self.chi_1 = v_0 + my_utils.col_vec(np.asarray(z_new).ravel())
 
         self.term_1 = dphi@Aq@(self.Z + phi)
         self.term_2 = (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T
