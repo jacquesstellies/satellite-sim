@@ -160,6 +160,14 @@ class Satellite():
         self.night_yaw_maneuver_enable = config['satellite'].get('nominal_night_yaw_maneuver_enable', True)
         self.night_yaw_max_tilt_deg = config['satellite'].get('nominal_night_yaw_max_tilt_deg', 20.0)
         self.night_yaw_leg_duration = config['satellite'].get('nominal_night_yaw_leg_duration', 20.0)
+        # One box pass leaves a residual (nadir drifts during the maneuver, and the box
+        # endpoint carries roll/pitch), so converging needs successive smaller passes.
+        # Wait out the cooldown between passes: the yaw metric picks up roll/pitch
+        # crosstalk, so re-measuring before the cleanup interp has settled chases phantom
+        # error. Give up once passes stop buying anything, rather than thrashing forever.
+        self.night_yaw_cooldown = config['satellite'].get('nominal_night_yaw_cooldown', 60.0)
+        self.night_yaw_max_attempts = config['satellite'].get('nominal_night_yaw_max_attempts', 4)
+        self.night_yaw_min_improve = config['satellite'].get('nominal_night_yaw_min_improve', 0.7)
 
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
@@ -258,6 +266,9 @@ class Satellite():
     _night_box_active = False
     _night_box_rots = None
     _night_box_times = None
+    _night_box_next_allowed_t = 0.0
+    _night_box_attempts = 0
+    _night_box_prev_err = None
     def update_ref_q(self, t):
         if t >= self.next_t_ref_update:
             self.next_t_ref_update = t + self.next_t_ref_update_interval
@@ -310,6 +321,9 @@ class Satellite():
                         self.w_RI_R = np.zeros(3)
                         self.dw_RI_R = np.zeros(3)
                         self._night_box_active = False
+                        # Re-arm after a cooldown instead of latching off for good, so
+                        # successive (smaller) passes can converge the residual yaw.
+                        self._night_box_next_allowed_t = t + self.night_yaw_cooldown
                     else:
                         i = self._tracking_find_time_index(t, self._night_box_times)
                         self._tracking_update_ref_project_smooth_interp(
@@ -332,31 +346,56 @@ class Satellite():
                     # Yaw (z) component of the body->target error, as an angle (rad for a
                     # pure-z rotation; approximate otherwise) - this is specifically the
                     # unactuated-axis error, not the full 3-axis error.
-                    err_deg = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
-                    if abs(err_deg) > self.night_interp_threshold_deg:
-                        if self.night_yaw_maneuver_enable:
-                            q_series, info = yaw_maneuver_waypoints(err_deg, max_tilt_deg=self.night_yaw_max_tilt_deg)
-                            rot_start = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
-                            self._night_box_rots = [rot_start * Rotation.from_quat(q) for q in q_series]
-                            n_legs = len(self._night_box_rots) - 1
-                            self._night_box_times = t + self.night_yaw_leg_duration * np.arange(len(self._night_box_rots))
-                            self._night_box_active = True
-                            print("nominal_night: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
-                                  "box maneuver (tilt={:.1f} deg) over {:.1f}s".format(
-                                      err_deg, t, n_legs, info['tilt_deg'], self.night_yaw_leg_duration * n_legs))
-                            self._tracking_update_ref_project_smooth_interp(
-                                t, self._night_box_times[0], self._night_box_times[1],
-                                self._night_box_rots[0], self._night_box_rots[1], dt)
-                        else:
-                            print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg, t, self.night_interp_duration))
-                            self._night_interp_active = True
-                            self._night_interp_t0 = t
-                            self._night_interp_t1 = t + self.night_interp_duration
-                            self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
-                            self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
-                            self._tracking_update_ref_project_smooth_interp(
-                                t, self._night_interp_t0, self._night_interp_t1,
-                                self._night_interp_rot0, self._night_interp_rot1, dt)
+                    err_deg_unactuated = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
+                    err_deg_total = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
+
+                    start_box = (abs(err_deg_unactuated) > self.night_interp_threshold_deg
+                                 and self.night_yaw_maneuver_enable
+                                 and t >= self._night_box_next_allowed_t)
+                    if start_box:
+                        # Stop re-arming once passes stop paying for themselves, otherwise
+                        # we thrash multi-minute maneuvers forever against the residual
+                        # floor set by nadir drift during the box + metric crosstalk.
+                        give_up = None
+                        if self._night_box_attempts >= self.night_yaw_max_attempts:
+                            give_up = "attempt budget ({:d}) spent".format(self.night_yaw_max_attempts)
+                        elif (self._night_box_prev_err is not None
+                              and abs(err_deg_unactuated) >= self.night_yaw_min_improve * abs(self._night_box_prev_err)):
+                            give_up = "no longer converging ({:.2f} -> {:.2f} deg)".format(
+                                self._night_box_prev_err, err_deg_unactuated)
+                        if give_up is not None:
+                            print("nominal_night: yaw error {:.2f} deg at t={:.2f}s - {}, holding "
+                                  "nadir track with yaw uncorrected".format(err_deg_unactuated, t, give_up))
+                            self.night_yaw_maneuver_enable = False
+                            start_box = False
+
+                    if start_box:
+                        q_series, info = yaw_maneuver_waypoints(err_deg_unactuated, max_tilt_deg=self.night_yaw_max_tilt_deg)
+                        rot_start = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                        self._night_box_rots = [rot_start * Rotation.from_quat(q) for q in q_series]
+                        n_legs = len(self._night_box_rots) - 1
+                        self._night_box_times = t + self.night_yaw_leg_duration * np.arange(len(self._night_box_rots))
+                        self._night_box_active = True
+                        self._night_box_attempts += 1
+                        self._night_box_prev_err = err_deg_unactuated
+                        print("nominal_night: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
+                              "box maneuver (tilt={:.1f} deg) over {:.1f}s [pass {:d}/{:d}]".format(
+                                  err_deg_unactuated, t, n_legs, info['tilt_deg'],
+                                  self.night_yaw_leg_duration * n_legs,
+                                  self._night_box_attempts, self.night_yaw_max_attempts))
+                        self._tracking_update_ref_project_smooth_interp(
+                            t, self._night_box_times[0], self._night_box_times[1],
+                            self._night_box_rots[0], self._night_box_rots[1], dt)
+                    elif abs(err_deg_total) > self.night_interp_threshold_deg:
+                        print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg_total, t, self.night_interp_duration))
+                        self._night_interp_active = True
+                        self._night_interp_t0 = t
+                        self._night_interp_t1 = t + self.night_interp_duration
+                        self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                        self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
+                        self._tracking_update_ref_project_smooth_interp(
+                            t, self._night_interp_t0, self._night_interp_t1,
+                            self._night_interp_rot0, self._night_interp_rot1, dt)
                     else:
                         self.q_RI = new_q_RI
             else:
