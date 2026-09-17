@@ -355,16 +355,16 @@ class Orbit():
         theta = self._gmst_rad(self.jd + self.fr)
         c, s = np.cos(theta), np.sin(theta)
         # TEME -> ECEF (PEF): R3(GMST)
-        r_ecef = np.array([c * r_I[0] + s * r_I[1],
+        r_G = np.array([c * r_I[0] + s * r_I[1],
                            -s * r_I[0] + c * r_I[1],
                            r_I[2]])
-        r_hat = r_ecef / r
-        m_ecef = np.array([IGRF_G11_NT, IGRF_H11_NT, IGRF_G10_NT])  # nT
-        B_ecef_nT = (IGRF_A_KM / r)**3 * (3.0 * np.dot(m_ecef, r_hat) * r_hat - m_ecef)
+        r_hat = r_G / r
+        m_G = np.array([IGRF_G11_NT, IGRF_H11_NT, IGRF_G10_NT])  # nT
+        B_G_nT = (IGRF_A_KM / r)**3 * (3.0 * np.dot(m_G, r_hat) * r_hat - m_G)
         # ECEF -> TEME: R3(-GMST)
-        B_I_nT = np.array([c * B_ecef_nT[0] - s * B_ecef_nT[1],
-                           s * B_ecef_nT[0] + c * B_ecef_nT[1],
-                           B_ecef_nT[2]])
+        B_I_nT = np.array([c * B_G_nT[0] - s * B_G_nT[1],
+                           s * B_G_nT[0] + c * B_G_nT[1],
+                           B_G_nT[2]])
         self.B_I = B_I_nT * 1e-9  # Tesla
         
 class Disturbances():
