@@ -133,7 +133,7 @@ class Orbit():
         if not self.enable:
             return
         if t_runtime >= self.next_t_sample:
-            self.next_t_sample += self.t_sample
+            self.next_t_sample = t_runtime + self.t_sample
         else:
             return
 
