@@ -4,6 +4,7 @@ import quaternion
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import toml
 
 xyz_axes = ['x', 'y', 'z']
 q_axes = ['x', 'y', 'z', 'w']
@@ -358,11 +359,16 @@ def angle_vec(v1: np.array, v2: np.array) -> float:
     cos_theta = np.clip(cos_theta, -1.0, 1.0)
     return np.arccos(cos_theta)
 
+def load_config(config_file_path):
+    with open(config_file_path, 'r') as f:
+        config = toml.load(f)
+    return config
+
 #! @brief Create a combined plot with multiple rows and columns
 # @param rows: List of tuples, each containing (row_name, [axes], label)
 # @param cols: Number of columns in the plot
 # @param results_data: Dictionary containing data to plot
-def create_plots_separated(rows, results_data, config, LOG_FILE_NAME, file_name_append = ""):
+def create_plots_separated(rows, results_data, config, LOG_FILE_NAME, LOG_DIR, file_name_append = ""):
     # Create separate figures if enabled in config
     names = []
     for row in rows:
@@ -387,17 +393,24 @@ def create_plots_separated(rows, results_data, config, LOG_FILE_NAME, file_name_
         ax_separate.set_ylabel(label)
         ax_separate.grid(visible=True, axis='both')
         if ax_separate.get_legend_handles_labels()[0] != []:
-            ax_separate.legend(loc='upper right')
+            ax_separate.legend(loc='upper left')
         
         if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None:
-            if not os.path.exists(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs")):
-                os.mkdir(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs"))
-            fig_separate.savefig(os.path.abspath(fr"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{row_name}{file_name_append}.png"), bbox_inches='tight')
+            if not os.path.exists(os.path.abspath(fr"{LOG_DIR}/graphs")):
+                os.mkdir(os.path.abspath(fr"{LOG_DIR}/graphs"))
+            fig_separate.savefig(os.path.abspath(fr"{LOG_DIR}/graphs/{LOG_FILE_NAME}_{row_name}{file_name_append}.png"), bbox_inches='tight')
         
         if config['output']['separate_plots_display'] is False:
             plt.close(fig_separate)
 
-def create_plots_comparison(rows : list, label : str, graph_name: str, results_data : dict, config : dict, LOG_FILE_NAME : str , show : bool = False):
+def create_plots_comparison(rows : list, 
+                            label : str, 
+                            graph_name: str, 
+                            results_data : dict, 
+                            config : dict, 
+                            LOG_FILE_NAME : str , 
+                            LOG_DIR : str, 
+                            show : bool = False):
     fig = plt.figure(figsize=(12,6))
     ax = fig.add_subplot(111)
     for row_idx, row in enumerate(rows):
@@ -427,9 +440,9 @@ def create_plots_comparison(rows : list, label : str, graph_name: str, results_d
     ax.set_ylabel(label)
 
     if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-        fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_{graph_name}.png"), bbox_inches='tight')
+        fig.savefig(os.path.abspath(f"{LOG_DIR}/graphs/{LOG_FILE_NAME}_{graph_name}.png"), bbox_inches='tight')
 
-def create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME, type='line', x_axis=None):
+def create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME, LOG_DIR, type='line', x_axis=None):
     fig, ax= plt.subplots(int(np.ceil(len(rows)/cols)),cols,sharex=True,figsize=(18,8))
 
     ax_as_np_array= np.array(ax)
@@ -466,9 +479,9 @@ def create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME, type=
             print(f"Error showing plots: {e}")
 
     if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-        fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/{LOG_FILE_NAME}_summary.png"), bbox_inches='tight')
+        fig.savefig(os.path.abspath(f"{LOG_DIR}/{LOG_FILE_NAME}_summary.png"), bbox_inches='tight')
 
-def create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME):
+def create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME, LOG_DIR):
     fig = plt.figure(figsize=(8,8))
     ax = fig.add_subplot(111, projection='3d')
     try:
@@ -481,4 +494,4 @@ def create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME):
         print(f"Error plotting 3D quaternion trajectory: {e}")
     # plt.show()
     if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
-        fig.savefig(os.path.abspath(f"../data_logs/{LOG_FILE_NAME}/graphs/{LOG_FILE_NAME}_quaternion_3D_trajectory.png"), bbox_inches='tight')
+        fig.savefig(os.path.abspath(f"{LOG_DIR}/graphs/{LOG_FILE_NAME}_quaternion_3D_trajectory.png"), bbox_inches='tight')

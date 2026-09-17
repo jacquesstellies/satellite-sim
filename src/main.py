@@ -480,11 +480,19 @@ def main():
                 results_plots.append(('m_magt', my_utils.xyz_axes, 'Magnetorquer Moment (A.m^2)'))
                 results_plots.append(('B_eci', my_utils.xyz_axes, 'Magnetic Field ECI (T)'))
                 # results_plots.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
-                results_plots.append(('H_total', my_utils.xyz_axes, 'Total Angular Momentum (Nm*s)'))
+                results_plots.append(('H_total', my_utils.xyz_axes, 'Total Angular Momentum (Nms)'))
+                results_plots.append(('H_norm', ['none'], 'Total Angular Momentum Norm (Nms)'))
 
                 results_plots.append(('s_sat_eci', my_utils.xyz_axes, 'Satellite Position ECI (km)'))
                 results_plots.append(('v_sat_eci', my_utils.xyz_axes, 'Satellite Velocity ECI (km/s)'))
                 results_plots.append(('n_sun', my_utils.xyz_axes, 'Sun Vector (unitless)'))
+                results_plots.append(('n_nadir', my_utils.xyz_axes, 'Nadir Vector (unitless)'))
+
+                if satellite.mode == "nominal_night":
+                    # Boresight (body +z) to nadir angle - the pointing metric this mode
+                    # is tracking, with the (unactuated) yaw about the boresight excluded.
+                    results_plots.append(('boresight_nadir_error_deg', ['none'],
+                                          'Boresight (body z) to Nadir Angle (deg)'))
 
                 # Nadafi auxiliary variables
                 if controller.type == "backstepping":
@@ -510,27 +518,27 @@ def main():
                         results_plots.append(('phi_hat', ['none'], 'phi_hat (unitless)'))
 
 
-                my_utils.create_plots_separated(results_plots_summary, simulation.results_df, config, LOG_FILE_NAME)
-                my_utils.create_plots_combined(results_plots_summary, cols, simulation.results_df, config, LOG_FILE_NAME)
+                my_utils.create_plots_separated(results_plots_summary, simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH)
+                my_utils.create_plots_combined(results_plots_summary, cols, simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH)
 
-                my_utils.create_plots_separated(results_plots, simulation.results_df, config, LOG_FILE_NAME)
+                my_utils.create_plots_separated(results_plots, simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH)
 
-                my_utils.create_3D_quaternion_plot(simulation.results_df, config, LOG_FILE_NAME)
+                my_utils.create_3D_quaternion_plot(simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH)
 
                 if satellite.wheels_control_enable:
                     if satellite.observer_module.enable:
                         my_utils.create_plots_comparison([('w_wheels', _axes),
                                             ('w_wheels_est', _axes)
-                                            ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                                            ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                         my_utils.create_plots_comparison([('T_wheels', _axes),
                                             ('T_wheels_est', _axes)
-                                            ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                                            ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                         my_utils.create_plots_comparison([('E', _axes), ('E_est', _axes)
-                                            ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                                            ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
 
-                    my_utils.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                    my_utils.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                     
-                    my_utils.create_plots_comparison([('q_sat', ['x', 'y', 'z']),('q_sat_ref', ['x', 'y', 'z'])], 'Quaternion', 'q_sat_vs_ref_vec', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                    my_utils.create_plots_comparison([('q_sat', ['x', 'y', 'z']),('q_sat_ref', ['x', 'y', 'z'])], 'Quaternion', 'q_sat_vs_ref_vec', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
 
                     inertia = np.asarray(config['satellite']['M_Inertia'])
                     # chi_1 = simulation.results_df[['chi_1_x', 'chi_1_y', 'chi_1_z']].to_numpy()
@@ -539,8 +547,8 @@ def main():
                     simulation.results_df[['d_x', 'd_y', 'd_z']] = d @ np.linalg.inv(inertia)
 
                     if controller.sub_type.startswith("Nadafi"):
-                        my_utils.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], 'Nm', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, show=False)
-                        my_utils.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], 'rad/s', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, show=False)
+                        my_utils.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], 'Nm', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                        my_utils.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], 'rad/s', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                     simulation.log_data_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH)
 
                 if config['output']['visualizer']['enable'] is True:

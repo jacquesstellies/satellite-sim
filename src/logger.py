@@ -66,6 +66,7 @@ class Logger:
             self.results_data[f's_sat_eci_{i}'] = []
             self.results_data[f'v_sat_eci_{i}'] = []
             self.results_data[f'n_sun_{i}'] = []
+            self.results_data[f'n_nadir_{i}'] = []
             self.results_data[f'w_sat_ref_{i}'] = []
             self.results_data[f'dw_sat_ref_{i}'] = []
         
@@ -132,6 +133,7 @@ class Logger:
                     self.results_data['s_sat_eci_' + axis].append(self.satellite.orbit.sBI_I[i])
                     self.results_data['v_sat_eci_' + axis].append(self.satellite.orbit.DIsBI_I[i])
                     self.results_data['n_sun_' + axis].append(self.satellite.orbit.nSB_I[i])
+                    self.results_data['n_nadir_' + axis].append(self.satellite.orbit.nIB_I[i])
                     self.results_data['H_total_' + axis].append((self.satellite.H_total)[i])
                     self.results_data['w_sat_ref_' + axis].append(self.satellite.w_RI_R[i])
                     self.results_data['dw_sat_ref_' + axis].append(self.satellite.dw_RI_R[i])
