@@ -184,12 +184,24 @@ class Simulation:
         for axis in my_utils.xyz_axes:
             self.results_df[f'w_sat_error_{axis}'] = self.results_df[f'w_sat_{axis}'] - self.results_df[f'w_sat_ref_{axis}']
 
+        # Boresight (body +z) vs nadir - the pointing metric nominal_night is actually
+        # trying to null, independent of yaw about the boresight (which q_sat_error and
+        # euler_axis_sat_error_deg both fold in). r_sat is the passive matrix T_BI, so
+        # applying it to the inertial nadir vector gives nadir in body coords; the angle
+        # it makes with body +z is the boresight pointing error.
+        n_nadir_I = self.results_df[[f'n_nadir_{axis}' for axis in my_utils.xyz_axes]].to_numpy()
+        n_nadir_B = r_sat.apply(n_nadir_I)
+        self.results_df['boresight_nadir_error_deg'] = np.degrees(
+            np.arccos(np.clip(n_nadir_B[:, 2], -1.0, 1.0)))
+
         if use_only_sol == False:
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
                 self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
                 # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
             for i, wheel in enumerate(self.satellite.wheel_module.wheels):
                 self.results_df[f'f_wheels_error_{i}'] = self.results_df[f'f_wheels_{i}'] - self.results_df[f'f_wheels_est_{i}']
+
+        self.results_df['H_norm'] = np.sqrt(self.results_df['H_total_x']**2 + self.results_df['H_total_y']**2 + self.results_df['H_total_z']**2)
 
         if self.config['output']['energy_enable']:
             self.calc_control_energy_output_results()  
