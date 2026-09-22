@@ -159,7 +159,7 @@ class NadafiController:
         # return np.array([u_r[0], u_r[1], 0])
     
     ##############################################################################################
-    def calc_output_BS_FNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array, dw_d : np.array):
+    def calc_output_BS_FNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array, dw_d : np.array, T_magt : np.array):
         self.nf_idx = [i for i in range(3) if i != self.f_idx] # no fault indices
 
         C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
@@ -206,11 +206,13 @@ class NadafiController:
 
         L_r = my_utils.col_vec([self.L11, self.L22])
 
+        T_magt_r = my_utils.col_vec(self.J_0_r_inv @ np.asarray(T_magt)[self.nf_idx])      # new argument
+
         e0 = self.chi_0 - w_err_r
         sat_e0 = np.clip(e0 / self.bl_eps, -1.0, 1.0)
         v_0 = -self.kappa_0 * np.multiply(np.sqrt(np.multiply(L_r, np.abs(e0))), sat_e0) + self.chi_1
         u_wheels_prev = my_utils.col_vec(u_wheels_prev)
-        dchi_0 = v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F
+        dchi_0 = v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F + T_magt_r
         self.chi_0 = self.chi_0 + dchi_0 * self.t_sample
 
         # semi-implicit (Acary-Brogliato) update of chi_1 -> v_0: explicit Euler
@@ -225,7 +227,7 @@ class NadafiController:
         self.term_1 = dphi@Aq@(self.Z + phi)
         self.term_2 = (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T
 
-        u_r = - self.chi_1 - self.F + dphi@Aq@(self.Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z
+        u_r = - self.chi_1 - self.F - T_magt_r + dphi@Aq@(self.Z + phi) - (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T - np.diag([self.Gamma_z11, self.Gamma_z22]) @ self.Z
         h_w = -1*self.J_0_r @ u_r
         
         return np.array([h_w[0,0], h_w[1,0], 0])
@@ -865,7 +867,7 @@ class Controller:
                 
         elif self.sub_type == "Nadafi_FNDO":
            q_err = my_utils.get_quaternion_error_Nadafi(q_BI, q_RI)
-           u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_RI_R, satellite.dw_RI_R)
+           u = self.nadafi_controller.calc_output_BS_FNDO(q_err, w, self.u_wheels_prev, satellite.w_RI_R, satellite.dw_RI_R, satellite.magt_module.T)
 
         elif self.sub_type == "Nadafi_BS":
             q_err = my_utils.get_quaternion_error_Nadafi(q_BI, q_RI)
