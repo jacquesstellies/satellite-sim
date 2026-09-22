@@ -255,6 +255,7 @@ def Nadafi_BS_MFNDO_controller_param_optimize(gains, particle_num, config):
 
 def main():
     LOG_FILE_NAME, LOG_FOLDER_PATH, config, args = parse_args()
+    
     if os.path.exists(LOG_FOLDER_PATH) is False:
         os.mkdir(LOG_FOLDER_PATH)
     results_data = {}
@@ -412,7 +413,7 @@ def main():
             print("Simulation Complete")
 
             simulation.collect_results(sol)
-            rows = [('q_sat',my_utils.q_axes, 'Quaternion'), ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)' )]
+            rows = [('q_sat',my_utils.q_axes, r'Quaternion $q$'), ('w_sat',my_utils.xyz_axes, r'Angular velocity $\omega$ (rad/s)' )]
             print("Creating plots of tuned parameters simulation...")
             simulation.create_plots_separated(rows, simulation.results_df, config, LOG_FILE_NAME)
 
@@ -442,80 +443,80 @@ def main():
 
                 ## Row should be in the form of (row_name, [axes], label)
                 cols = 2
-                results_plots_summary = [ ('w_sat',my_utils.xyz_axes, 'Angular velocity (rad/s)'), 
-                        ('q_sat',my_utils.q_axes, 'Quaternion'), 
-                        ('e321_sat', ['yaw','pitch', 'roll'], 'Euler angle (deg)'), \
-                        ('euler_axis_sat_deg', ['none'], 'Euler Angle about Principal Axis (deg)'),
-                        ('T_sat',my_utils.xyz_axes, 'Torque (N)'), 
-                        ('control_energy',my_utils.xyz_axes, 'Control Energy (J)'), 
-                        ('T_dist', my_utils.xyz_axes, 'Torque Disturbance (N)')
+                results_plots_summary = [ ('w_sat',my_utils.xyz_axes, r'Angular velocity $\omega$ (rad/s)'), 
+                        ('q_sat',my_utils.q_axes, r'Quaternion $q$'), 
+                        ('e321_sat', ['yaw','pitch', 'roll'], r'Euler angle (deg)'), \
+                        ('euler_axis_sat_deg', ['none'], r'Principal axis angle $\theta$ (deg)'),
+                        ('T_sat',my_utils.xyz_axes, r'Torque $T$ ($\mathrm{N \cdot m}$)'), 
+                        ('control_energy',my_utils.xyz_axes, r'Control energy $E_c$ (J)'), 
+                        ('T_dist', my_utils.xyz_axes, r'Disturbance torque $T_d$ ($\mathrm{N \cdot m}$)')
                         ]
                 
 
                 results_plots = []
                 if satellite.wheels_control_enable:
                     _axes = [str(wheel.index) for wheel in wheel_module.wheels]
-                    results_plots.append(('T_wheels', _axes, 'Wheel Torque (Nm)'))
-                    results_plots.append(('w_wheels', [str(wheel.index) for wheel in wheel_module.wheels], 'Wheel speed (rad/s)'))
-                    results_plots.append(('E', _axes, 'Actuator Authority Estimate (Fraction)'))
-                    results_plots.append(('f_wheels', _axes, 'Disturbance Torque (Nm)'))
-                    results_plots.append(('u_a', _axes, 'Additive Fault (Nm)'))
+                    results_plots.append(('T_wheels', _axes, r'Wheel torque $T_w$ ($\mathrm{N \cdot m}$)'))
+                    results_plots.append(('w_wheels', [str(wheel.index) for wheel in wheel_module.wheels], r'Wheel speed $\omega_w$ (rad/s)'))
+                    results_plots.append(('E', _axes, r'Actuator authority $E$ (fraction)'))
+                    results_plots.append(('f_wheels', _axes, r'Wheel disturbance torque $f_w$ ($\mathrm{N \cdot m}$)'))
+                    results_plots.append(('u_a', _axes, r'Additive fault $u_a$ ($\mathrm{N \cdot m}$)'))
                     if satellite.observer_module.enable:
-                        results_plots.append(('w_wheels_est', _axes, 'Estimated Wheel Speed (rad/s)'))
-                        results_plots.append(('T_wheels_est', _axes, 'Estimated Wheel Torque (rad/s^2)'))
-                        results_plots.append(('f_wheels_est', _axes, 'Estimated Disturbance Torque (Nm)'))
-                        results_plots.append(('f_wheels_error', _axes, 'Disturbance Torque Error (Nm)'))
-                        results_plots.append(('E_est', _axes, 'Actuator Authority Estimate (Fraction)'))
+                        results_plots.append(('w_wheels_est', _axes, r'Estimated wheel speed $\hat{\omega}_w$ (rad/s)'))
+                        results_plots.append(('T_wheels_est', _axes, r'Estimated wheel torque $\hat{T}_w$ ($\mathrm{N \cdot m}$)'))
+                        results_plots.append(('f_wheels_est', _axes, r'Estimated wheel disturbance torque $\hat{f}_w$ ($\mathrm{N \cdot m}$)'))
+                        results_plots.append(('f_wheels_error', _axes, r'Wheel disturbance torque error $f_e$ ($\mathrm{N \cdot m}$)'))
+                        results_plots.append(('E_est', _axes, r'Estimated actuator authority $\hat{E}$ (fraction)'))
                         
                 if controller.type == "adaptive":
                     results_plots_summary.append(('control_adaptive_model_output',['none']))
                     results_plots_summary.append(('control_theta',my_utils.xyz_axes))
                 
-                results_plots.append(('q_sat_ref', my_utils.q_axes, 'Reference Quaternion'))
-                results_plots.append(('q_sat_error', my_utils.q_axes, 'Quaternion Error (satellite to reference)'))
-                results_plots.append(('w_sat_ref', my_utils.xyz_axes, 'Reference Angular Velocity (rad/s)'))
-                results_plots.append(('w_sat_error', my_utils.xyz_axes, 'Angular Velocity Error (rad/s)'))
-                results_plots.append(('euler_axis_sat_error_deg', ['none'], 'Error Euler Angle about Principal Axis (deg)'))
-                results_plots.append(('T_magt', my_utils.xyz_axes, 'Magnetorquer Torque (Nm)'))
-                results_plots.append(('m_magt', my_utils.xyz_axes, 'Magnetorquer Moment (A.m^2)'))
-                results_plots.append(('B_eci', my_utils.xyz_axes, 'Magnetic Field ECI (T)'))
+                results_plots.append(('q_sat_ref', my_utils.q_axes, r'Reference quaternion $q_d$'))
+                results_plots.append(('q_sat_error', my_utils.q_axes, r'Quaternion error $q_e$ (satellite to reference)'))
+                results_plots.append(('w_sat_ref', my_utils.xyz_axes, r'Reference angular velocity $\omega_r$ (rad/s)'))
+                results_plots.append(('w_sat_error', my_utils.xyz_axes, r'Angular velocity error $\omega_e$ (rad/s)'))
+                results_plots.append(('euler_axis_sat_error_deg', ['none'], r'Principal axis angle error $\theta_e$ (deg)'))
+                results_plots.append(('T_magt', my_utils.xyz_axes, r'Magnetorquer torque $T_m$ ($\mathrm{N \cdot m}$)'))
+                results_plots.append(('m_magt', my_utils.xyz_axes, r'Magnetorquer moment $m$ ($\mathrm{A \cdot m^2}$)'))
+                results_plots.append(('B_eci', my_utils.xyz_axes, r'Magnetic field ECI $B$ (T)'))
                 # results_plots.append(('euler_axis_sat_ref', ['none'], 'Reference Euler Angle about Principal Axis (deg)'))
-                results_plots.append(('H_total', my_utils.xyz_axes, 'Total Angular Momentum (Nms)'))
-                results_plots.append(('H_norm', ['none'], 'Total Angular Momentum Norm (Nms)'))
+                results_plots.append(('H_total', my_utils.xyz_axes, r'Total angular momentum $H$ ($\mathrm{N \cdot m \cdot s}$)'))
+                results_plots.append(('H_norm', ['none'], r'Total angular momentum norm $\|H\|$ ($\mathrm{N \cdot m \cdot s}$)'))
 
-                results_plots.append(('s_sat_eci', my_utils.xyz_axes, 'Satellite Position ECI (km)'))
-                results_plots.append(('v_sat_eci', my_utils.xyz_axes, 'Satellite Velocity ECI (km/s)'))
-                results_plots.append(('n_sun', my_utils.xyz_axes, 'Sun Vector (unitless)'))
-                results_plots.append(('n_nadir', my_utils.xyz_axes, 'Nadir Vector (unitless)'))
+                results_plots.append(('s_sat_eci', my_utils.xyz_axes, r'Satellite position ECI $s$ (km)'))
+                results_plots.append(('v_sat_eci', my_utils.xyz_axes, r'Satellite velocity ECI $v$ (km/s)'))
+                results_plots.append(('n_sun', my_utils.xyz_axes, r'Sun vector $n_s$ (unitless)'))
+                results_plots.append(('n_nadir', my_utils.xyz_axes, r'Nadir vector $n_n$ (unitless)'))
 
                 if satellite.mode == "nominal_night":
                     # Boresight (body +z) to nadir angle - the pointing metric this mode
                     # is tracking, with the (unactuated) yaw about the boresight excluded.
                     results_plots.append(('boresight_nadir_error_deg', ['none'],
-                                          'Boresight (body z) to Nadir Angle (deg)'))
+                                          r'Boresight (body $z$) to nadir angle $\theta_{bn}$ (deg)'))
 
                 # Nadafi auxiliary variables
                 if controller.type == "backstepping":
                     if controller.sub_type.startswith("Nadafi"):
-                        results_plots.append(('F', my_utils.xyz_axes, 'F rad/s^2'))
-                        results_plots.append(('Z_norm', ['none'], 'Z norm rad/s'))
-                        results_plots.append(('Z', my_utils.xyz_axes, 'Z rad/s'))
-                        results_plots.append(('term_1', my_utils.xyz_axes, 'term_1 (Nm)'))
-                        results_plots.append(('term_2', my_utils.xyz_axes, 'term_2 (Nm)'))
+                        results_plots.append(('F', my_utils.xyz_axes, r'$F$ ($\mathrm{rad/s^2}$)'))
+                        results_plots.append(('Z_norm', ['none'], r'$\|Z\|$ (rad/s)'))
+                        results_plots.append(('Z', my_utils.xyz_axes, r'$Z$ (rad/s)'))
+                        results_plots.append(('term_1', my_utils.xyz_axes, r'$u_1$ ($\mathrm{N \cdot m}$)'))
+                        results_plots.append(('term_2', my_utils.xyz_axes, r'$u_2$ ($\mathrm{N \cdot m}$)'))
                         # if controller.sub_type == "Nadafi_FNDO":
-                        results_plots.append(('v_0', my_utils.xyz_axes, 'v_0 (rad/s)'))
-                        results_plots.append(('chi_0', my_utils.xyz_axes, 'chi_0 (rad/s)'))
-                        results_plots.append(('chi_1', my_utils.xyz_axes, 'chi_1 (Nm   )'))
-                        results_plots.append(('mu', my_utils.xyz_axes, 'mu (rad/s)'))
+                        results_plots.append(('v_0', my_utils.xyz_axes, r'$v_0$ (rad/s)'))
+                        results_plots.append(('chi_0', my_utils.xyz_axes, r'$\chi_0$ (rad/s)'))
+                        results_plots.append(('chi_1', my_utils.xyz_axes, r'$\chi_1$ ($\mathrm{rad/s^2}$)'))
+                        results_plots.append(('mu', my_utils.xyz_axes, r'$\mu$ (rad/s)'))
                     if controller.sub_type.startswith("Zarourati"):
-                        results_plots.append(('xi', ['none'], 'xi (unitless)'))
-                        results_plots.append(('eta_norm', ['none'], 'eta norm (unitless)'))
-                        results_plots.append(('kappa1', ['none'], 'kappa1 (unitless)'))
-                        results_plots.append(('kappa2', ['none'], 'kappa2 (unitless)'))
-                        results_plots.append(('we_u', ['none'], 'we_u (unitless)'))
-                        results_plots.append(('dwe_u', ['none'], 'dwe_u (unitless)'))
-                        results_plots.append(('eta', my_utils.xyz_axes, 'eta (unitless)'))
-                        results_plots.append(('phi_hat', ['none'], 'phi_hat (unitless)'))
+                        results_plots.append(('xi', ['none'], r'$\xi$ (unitless)'))
+                        results_plots.append(('eta_norm', ['none'], r'$\|\eta\|$ (unitless)'))
+                        results_plots.append(('kappa1', ['none'], r'$\kappa_1$ (unitless)'))
+                        results_plots.append(('kappa2', ['none'], r'$\kappa_2$ (unitless)'))
+                        results_plots.append(('we_u', ['none'], r'$\omega_{eu}$ (rad/s)'))
+                        results_plots.append(('dwe_u', ['none'], r'$\dot{\omega}_{eu}$ ($\mathrm{rad/s^2}$)'))
+                        results_plots.append(('eta', my_utils.xyz_axes, r'$\eta$ (unitless)'))
+                        results_plots.append(('phi_hat', ['none'], r'$\hat{\phi}$ (unitless)'))
 
 
                 my_utils.create_plots_separated(results_plots_summary, simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH)
@@ -529,26 +530,37 @@ def main():
                     if satellite.observer_module.enable:
                         my_utils.create_plots_comparison([('w_wheels', _axes),
                                             ('w_wheels_est', _axes)
-                                            ], 'Wheel speed (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                                            ], r'Wheel speed $\omega_w$ (rad/s)', 'wheels_speed_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                         my_utils.create_plots_comparison([('T_wheels', _axes),
                                             ('T_wheels_est', _axes)
-                                            ], 'Wheel torque (Nm)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                                            ], r'Wheel torque $T_w$ ($\mathrm{N \cdot m}$)', 'wheels_torque_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                         my_utils.create_plots_comparison([('E', _axes), ('E_est', _axes)
-                                            ], 'Wheel effectiveness (Fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                                            ], r'Wheel effectiveness $E$ (fraction)', 'wheels_authority_meas_vs_est', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
 
-                    my_utils.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], 'Quaternion', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                    my_utils.create_plots_comparison([('q_sat', my_utils.q_axes),('q_sat_ref', my_utils.q_axes)], r'Quaternion $q$', 'q_sat_vs_ref', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                     
-                    my_utils.create_plots_comparison([('q_sat', ['x', 'y', 'z']),('q_sat_ref', ['x', 'y', 'z'])], 'Quaternion', 'q_sat_vs_ref_vec', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                    my_utils.create_plots_comparison([('q_sat', ['x', 'y', 'z']),('q_sat_ref', ['x', 'y', 'z'])], r'Quaternion $q$', 'q_sat_vs_ref_vec', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
 
                     inertia = np.asarray(config['satellite']['M_Inertia'])
                     # chi_1 = simulation.results_df[['chi_1_x', 'chi_1_y', 'chi_1_z']].to_numpy()
                     # simulation.results_df[['J0*chi_1_x', 'J0*chi_1_y', 'J0*chi_1_z']] = chi_1 @ inertia
-                    d = simulation.results_df[['T_dist_x', 'T_dist_y', 'T_dist_z']].to_numpy()
-                    simulation.results_df[['d_x', 'd_y', 'd_z']] = d @ np.linalg.inv(inertia)
+                    # Lumped body-frame disturbance acceleration that chi_1 should converge to.
+                    # Wheel torque enters the body dynamics as -D @ dH_wheels (satellite.py), and the
+                    # FNDO's known model carries the *commanded* torque with that same minus sign, so
+                    # the per-wheel fault torque f_wheels appears in the residual as -J^-1 @ D @ f_wheels.
+                    # f_wheels is per-wheel, so it must be mapped to the body through D first.
+                    D = np.asarray(simulation.satellite.wheel_module.D)
+                    f_wheels_body = simulation.results_df[[f'f_wheels_{i}' for i in range(simulation.satellite.wheel_module.num_wheels)]].to_numpy() @ D.T
+                    # T_magt is not in the FNDO's known model either, so it lands in chi_1 too. It is
+                    # not negligible whenever the magnetorquers are actively dumping momentum.
+                    d = simulation.results_df[['T_dist_x', 'T_dist_y', 'T_dist_z']].to_numpy() \
+                        - f_wheels_body
+                        # + simulation.results_df[['T_magt_x', 'T_magt_y', 'T_magt_z']].to_numpy() \
+                    simulation.results_df[['d_x', 'd_y', 'd_z']] = d @ np.linalg.inv(inertia).T
 
                     if controller.sub_type.startswith("Nadafi"):
-                        my_utils.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], 'Nm', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
-                        my_utils.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], 'rad/s', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                        my_utils.create_plots_comparison([('chi_1', my_utils.xyz_axes), ('d', my_utils.xyz_axes)], r'Angular acceleration ($\mathrm{rad/s^2}$)', 'chi_1_vs_d', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
+                        my_utils.create_plots_comparison([('chi_0', my_utils.xyz_axes), ('w_sat_error', my_utils.xyz_axes)], r'Angular velocity (rad/s)', 'chi_0_vs_w_sat_error', simulation.results_df, config, LOG_FILE_NAME, LOG_FOLDER_PATH, show=False)
                     simulation.log_data_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH)
 
                 if config['output']['visualizer']['enable'] is True:
@@ -609,9 +621,9 @@ def main():
                 def plot_q(passed):
                     fig = plt.figure()
                     ax = fig.add_subplot(111, projection='3d')
-                    ax.set_xlabel('X')
-                    ax.set_ylabel('Y')
-                    ax.set_zlabel('Z')
+                    ax.set_xlabel(my_utils.latex_label('q_sat', 'x'))
+                    ax.set_ylabel(my_utils.latex_label('q_sat', 'y'))
+                    ax.set_zlabel(my_utils.latex_label('q_sat', 'z'))
                     ax.set_title('Random Quaternion')
                     # for i in range(sim_iter):
                     q_init = generate_rand_quat()

@@ -364,11 +364,130 @@ def load_config(config_file_path):
         config = toml.load(f)
     return config
 
+###############################################################################
+# Plot Labelling
+###############################################################################
+
+# Match the thesis' LaTeX fonts so figures drop into the document unchanged.
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Latin Modern Roman", "CMU Serif"],
+    "mathtext.fontset": "cm",  # matches LaTeX math rendering
+})
+
+# Logged series name -> (stem, subscript) of the symbol it plots. The axis
+# suffix the logger appends (_x/_y/_z/_w, or the wheel index) is folded into the
+# subscript, so q_sat_error_x reads as q_{ex} rather than q_sat_error_x.
+plot_symbols = {
+    # Attitude
+    'q_sat':                     (r'q', ''),
+    'q_sat_ref':                 (r'q', 'd'),
+    'q_sat_error':               (r'q', 'e'),
+    'w_sat':                     (r'\omega', ''),
+    'w_sat_ref':                 (r'\omega', 'd'),
+    'w_sat_error':               (r'\omega', 'e'),
+    'dw_sat_ref':                (r'\dot{\omega}', 'd'),
+    'euler_axis_sat':            (r'\theta', ''),
+    'euler_axis_sat_deg':        (r'\theta', ''),
+    'euler_axis_sat_error':      (r'\theta', 'e'),
+    'euler_axis_sat_error_deg':  (r'\theta', 'e'),
+    'euler_int':                 (r'\theta', 'i'),
+    'boresight_nadir_error_deg': (r'\theta', 'bn'),
+    # Torques and energy
+    'T_sat':                     (r'T', ''),
+    'T_dist':                    (r'T', 'd'),
+    'T_magt':                    (r'T', 'm'),
+    'm_magt':                    (r'm', ''),
+    'control_energy':            (r'E', 'c'),
+    # Wheels
+    'w_wheels':                  (r'\omega', 'w'),
+    'w_wheels_est':              (r'\hat{\omega}', 'w'),
+    'dw_wheels_est':             (r'\dot{\hat{\omega}}', 'w'),
+    'T_wheels':                  (r'T', 'w'),
+    'T_wheels_est':              (r'\hat{T}', 'w'),
+    'T_ctr_wheels':              (r'T', 'c'),
+    'f_wheels':                  (r'f', 'w'),
+    'f_wheels_est':              (r'\hat{f}', 'w'),
+    'f_wheels_error':            (r'f', 'e'),
+    'u_a':                       (r'u', 'a'),
+    'E':                         (r'E', ''),
+    'E_est':                     (r'\hat{E}', ''),
+    # Momentum, orbit and environment
+    'H_total':                   (r'H', ''),
+    'H_norm':                    (r'\|H\|', ''),
+    'B_eci':                     (r'B', ''),
+    's_sat_eci':                 (r's', ''),
+    'v_sat_eci':                 (r'v', ''),
+    'n_sun':                     (r'n', 's'),
+    'n_nadir':                   (r'n', 'n'),
+    'd':                         (r'd', ''),
+    'f_wheels_acc':              (r'f', r'w\mathrm{acc}'),
+    # Nadafi backstepping / FNDO auxiliaries
+    'F':                         (r'F', ''),
+    'Z':                         (r'Z', ''),
+    'Z_norm':                    (r'\|Z\|', ''),
+    'term_1':                    (r'u', '1'),
+    'term_2':                    (r'u', '2'),
+    'v_0':                       (r'v', '0'),
+    'chi_0':                     (r'\chi', '0'),
+    'chi_1':                     (r'\chi', '1'),
+    'mu':                        (r'\mu', ''),
+    # Zarourati underactuated auxiliaries
+    'xi':                        (r'\xi', ''),
+    'eta':                       (r'\eta', ''),
+    'eta_norm':                  (r'\|\eta\|', ''),
+    'kappa1':                    (r'\kappa', '1'),
+    'kappa2':                    (r'\kappa', '2'),
+    'we_u':                      (r'\omega', 'eu'),
+    'dwe_u':                     (r'\dot{\omega}', 'eu'),
+    'phi_hat':                   (r'\hat{\phi}', ''),
+    # Adaptive controller
+    'control_theta':             (r'\hat{\theta}', ''),
+    'control_adaptive_model_output': (r'\theta', 'm'),
+}
+
+# Series whose "axis" names an angle rather than a vector component, so the axis
+# carries the symbol itself instead of becoming a subscript.
+plot_axis_symbols = {
+    'e321_sat': {'yaw': r'\psi', 'pitch': r'\theta', 'roll': r'\phi'},
+}
+
+def _upright(text : str) -> str:
+    """Multi-character names stay upright, single letters stay italic."""
+    return text if len(text) == 1 else rf"\mathrm{{{text}}}"
+
+def latex_label(row_name : str, axis = None) -> str:
+    """Math-mode label for a logged series, e.g. ('w_sat_error', 'x') -> $\\omega_{ex}$.
+
+    Unknown series fall back to the first name token as the stem and the rest as
+    an upright subscript, so no raw underscores ever reach the legend."""
+    axis_symbols = plot_axis_symbols.get(row_name)
+    if axis_symbols is not None and axis in axis_symbols:
+        return f"${axis_symbols[axis]}$"
+
+    if row_name in plot_symbols:
+        stem, sub = plot_symbols[row_name]
+    else:
+        tokens = row_name.split('_')
+        stem = _upright(tokens[0])
+        sub = ''.join(_upright(token) for token in tokens[1:])
+
+    subs = [s for s in (sub, axis) if s not in (None, '', 'none')]
+    if not subs:
+        return f"${stem}$"
+    return f"${stem}_{{{''.join(subs)}}}$"
+
 #! @brief Create a combined plot with multiple rows and columns
 # @param rows: List of tuples, each containing (row_name, [axes], label)
 # @param cols: Number of columns in the plot
 # @param results_data: Dictionary containing data to plot
-def create_plots_separated(rows, results_data, config, LOG_FILE_NAME, LOG_DIR, file_name_append = ""):
+def create_plots_separated(rows, 
+                           results_data, 
+                           config, 
+                           LOG_FILE_NAME, 
+                           LOG_DIR, 
+                           file_name_append = ""
+                           ):
     # Create separate figures if enabled in config
     names = []
     for row in rows:
@@ -383,7 +502,7 @@ def create_plots_separated(rows, results_data, config, LOG_FILE_NAME, LOG_DIR, f
                 axis = None
                 name = row_name
             try:
-                ax_separate.plot(results_data['time'], results_data[name], label=name)
+                ax_separate.plot(results_data['time'], results_data[name], label=latex_label(row_name, axis))
                 names.append(name)
             except Exception as e:
                 print(f"Error plotting {name}: {e}")
@@ -410,7 +529,8 @@ def create_plots_comparison(rows : list,
                             config : dict, 
                             LOG_FILE_NAME : str , 
                             LOG_DIR : str, 
-                            show : bool = False):
+                            show : bool = False
+                            ):
     fig = plt.figure(figsize=(12,6))
     ax = fig.add_subplot(111)
     for row_idx, row in enumerate(rows):
@@ -423,7 +543,7 @@ def create_plots_comparison(rows : list,
                 axis = None
                 name = row_name
             try:
-                ax.plot(results_data['time'], results_data[name], label=name, linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
+                ax.plot(results_data['time'], results_data[name], label=latex_label(row_name, axis), linestyle=['-','--',':'][row_idx%3], color=['r','g','b','y','m','gray','k'][axis_idx%7])
                 
             except Exception as e:
                 print(f"Error plotting {name}: {e}")
@@ -458,11 +578,11 @@ def create_plots_combined(rows, cols, results_data, config, LOG_FILE_NAME, LOG_D
                 name = row_name
             try:
                 if type == 'line':
-                    current_plot.plot(results_data['time'], results_data[name], label=axis)
+                    current_plot.plot(results_data['time'], results_data[name], label=latex_label(row_name, axis))
                 elif type == 'scatter':
                     if x_axis is None:
                         raise Exception("x_axis must be provided for scatter plot")
-                    current_plot.scatter(x_axis, results_data[name], label=axis)
+                    current_plot.scatter(x_axis, results_data[name], label=latex_label(row_name, axis))
             except Exception as e:
                 print(f"Error plotting {name}: {e}")
         current_plot.grid(visible=True, axis='both')
@@ -486,9 +606,9 @@ def create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME, LOG_DIR):
     ax = fig.add_subplot(111, projection='3d')
     try:
         ax.plot(results_data['q_sat_x'], results_data['q_sat_y'], results_data['q_sat_z'], label='Satellite Quaternion Trajectory')
-        ax.set_xlabel('q_x')
-        ax.set_ylabel('q_y')
-        ax.set_zlabel('q_z')
+        ax.set_xlabel(latex_label('q_sat', 'x'))
+        ax.set_ylabel(latex_label('q_sat', 'y'))
+        ax.set_zlabel(latex_label('q_sat', 'z'))
         ax.legend()
     except Exception as e:
         print(f"Error plotting 3D quaternion trajectory: {e}")

@@ -558,11 +558,16 @@ class Satellite():
         self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI)
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
+        # Ground-truth per-wheel fault torque, logged as f_wheels. Same sign convention as
+        # the ESO's f_wheels_est (dw_est = (u + f)/J): f = delivered - commanded
+        # = (E - I) u + u_a. Independent of the observer, so it must stay outside the
+        # observer_module.enable branch or it logs zeros whenever the observer is off.
+        self.f_wheels = (self.fault_module.E - np.eye(self.wheel_module.num_wheels)) @ self.T_ctr_wheels \
+            + self.fault_module.u_a
+
         if self.observer_module.enable is True:
-            self.E = self.observer_module.calc_state_estimates(t, w_wheels_input, self.T_ctr_wheels)
-            self.f_wheels = self.observer_module.f_wheels_est
-        else:
-            self.f_wheels = self.fault_module.E@self.T_ctr_wheels + self.fault_module.u_a
+            # @NB FIX THIS
+            self.E_est = self.observer_module.calc_state_estimates(t, w_wheels_input, self.T_ctr_wheels)
             self.E = self.fault_module.E
         #### Calculate state rates for satellite various subsystems
 
