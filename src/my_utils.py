@@ -123,6 +123,12 @@ MUMOON = 4902.799
 # Obliquities
 OBLIQUITYEARTH = np.radians(23.439291)
 
+###############################################################################
+# Plotting
+###############################################################################
+
+FIG_SIZE = (12, 8)  # 6.3" is the text width of the thesis but plots look too grainy if used for fig size
+
 # rotate an object's moment of inertia about the xyz axes (in degrees)
 def rotate_M_inertia(M_inertia : np.array, dir : Rotation):
     
@@ -365,6 +371,37 @@ def load_config(config_file_path):
     return config
 
 ###############################################################################
+# Wheel Layout
+###############################################################################
+
+# Wheel distribution matrices per layout. Shared by WheelModule and by the
+# plotting helpers below, so a run's plots can be rebuilt from its config alone
+# without instantiating the satellite.
+wheel_layouts = {
+    'ortho':   np.eye(3),
+    'pyramid': np.array([[-1, -1,  1, 1],
+                         [ 1, -1, -1, 1],
+                         [ 1,  1,  1, 1]]),
+    'tetra':   np.array([[ 0.9428, -0.4714, -0.4714, 0],
+                         [ 0,       0.8165, -0.8165, 0],
+                         [-0.3333, -0.3333, -0.3333, 1]]),
+}
+
+def get_wheel_layout(config) -> tuple:
+    """(num_wheels, D) for the configured wheel layout."""
+    layout = config['wheels']['config']
+    if layout == 'custom':
+        num_wheels = config['wheels']['num_wheels']
+        D = np.array(config['wheels']['D'])
+        if D.shape != (3, num_wheels):
+            raise(Exception(f"invalid D matrix shape {D.shape}"))
+        return num_wheels, D
+    if layout not in wheel_layouts:
+        raise(Exception(f"{layout} is not a valid wheel layout. \nerror unable to set up wheel layout"))
+    D = wheel_layouts[layout].copy()
+    return D.shape[1], D
+
+###############################################################################
 # Plot Labelling
 ###############################################################################
 
@@ -373,6 +410,11 @@ plt.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Latin Modern Roman", "CMU Serif"],
     "mathtext.fontset": "cm",  # matches LaTeX math rendering
+    "font.size": 14,        # matches \normalsize in the thesis
+    "axes.labelsize": 14,
+    "legend.fontsize": 16,  # matches caption "small" size roughly
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
 })
 
 # Logged series name -> (stem, subscript) of the symbol it plots. The axis
@@ -430,7 +472,9 @@ plot_symbols = {
     'term_2':                    (r'u', '2'),
     'v_0':                       (r'v', '0'),
     'chi_0':                     (r'\chi', '0'),
+    'chi_0_error':               (r'\chi', '0e'),
     'chi_1':                     (r'\chi', '1'),
+    'chi_1_error':               (r'\chi', '1e'),
     'mu':                        (r'\mu', ''),
     # Zarourati underactuated auxiliaries
     'xi':                        (r'\xi', ''),
@@ -492,7 +536,7 @@ def create_plots_separated(rows,
     names = []
     for row in rows:
         row_name, axes, label = row
-        fig_separate = plt.figure(figsize=(12,6))
+        fig_separate = plt.figure(figsize=FIG_SIZE)
         ax_separate = fig_separate.add_subplot(111)
         
         for axis in axes:
@@ -531,7 +575,7 @@ def create_plots_comparison(rows : list,
                             LOG_DIR : str, 
                             show : bool = False
                             ):
-    fig = plt.figure(figsize=(12,6))
+    fig = plt.figure(figsize=FIG_SIZE)
     ax = fig.add_subplot(111)
     for row_idx, row in enumerate(rows):
         row_name, axes = row
@@ -549,15 +593,16 @@ def create_plots_comparison(rows : list,
                 print(f"Error plotting {name}: {e}")
     ax.legend(loc='upper right')
     ax.grid(visible=True, axis='both')
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel(label)
+
+    # Labels go on before show(), otherwise the displayed figure is unlabelled
+    # while the saved png is fine.
     if show is True or config['output']['show_plots'] is True:
         try:
             plt.show()
         except Exception as e:
             print(f"Error showing plots: {e}")
-
-
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel(label)
 
     if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
         fig.savefig(os.path.abspath(f"{LOG_DIR}/graphs/{LOG_FILE_NAME}_{graph_name}.png"), bbox_inches='tight')
@@ -615,3 +660,163 @@ def create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME, LOG_DIR):
     # plt.show()
     if config['output']['pdf_output_enable'] is True and LOG_FILE_NAME != None and config['simulation']['test_mode_en'] is False:
         fig.savefig(os.path.abspath(f"{LOG_DIR}/graphs/{LOG_FILE_NAME}_quaternion_3D_trajectory.png"), bbox_inches='tight')
+
+###############################################################################
+# Standard Result Plots
+###############################################################################
+
+#! @brief Build the standard plot rows for a run from its config alone
+# @return (summary_rows, detail_rows), each a list of (row_name, [axes], label)
+def build_results_plots(config):
+    summary = [
+        ('w_sat', xyz_axes, r'Angular velocity $\omega$ (rad/s)'),
+        ('q_sat', q_axes, r'Quaternion $q$'),
+        ('e321_sat', ['yaw', 'pitch', 'roll'], r'Euler angle (deg)'),
+        ('euler_axis_sat_deg', ['none'], r'Principal axis angle $\theta$ (deg)'),
+        ('T_sat', xyz_axes, r'Torque $T$ ($\mathrm{N \cdot m}$)'),
+        ('control_energy', xyz_axes, r'Control energy $E_c$ (J)'),
+        ('T_dist', xyz_axes, r'Disturbance torque $T_d$ ($\mathrm{N \cdot m}$)'),
+    ]
+
+    detail = []
+
+    if config['satellite']['wheels_control_enable']:
+        num_wheels, _ = get_wheel_layout(config)
+        wheel_axes = [str(i) for i in range(num_wheels)]
+        detail.append(('T_wheels', wheel_axes, r'Wheel torque $T_w$ ($\mathrm{N \cdot m}$)'))
+        detail.append(('w_wheels', wheel_axes, r'Wheel speed $\omega_w$ (rad/s)'))
+        detail.append(('E', wheel_axes, r'Actuator authority $E$ (fraction)'))
+        detail.append(('f_wheels', wheel_axes, r'Wheel disturbance torque $f_w$ ($\mathrm{N \cdot m}$)'))
+        detail.append(('u_a', wheel_axes, r'Additive fault $u_a$ ($\mathrm{N \cdot m}$)'))
+        if config['observer']['enable']:
+            detail.append(('w_wheels_est', wheel_axes, r'Estimated wheel speed $\hat{\omega}_w$ (rad/s)'))
+            detail.append(('T_wheels_est', wheel_axes, r'Estimated wheel torque $\hat{T}_w$ ($\mathrm{N \cdot m}$)'))
+            detail.append(('f_wheels_est', wheel_axes, r'Estimated wheel disturbance torque $\hat{f}_w$ ($\mathrm{N \cdot m}$)'))
+            detail.append(('f_wheels_error', wheel_axes, r'Wheel disturbance torque error $f_e$ ($\mathrm{N \cdot m}$)'))
+            detail.append(('E_est', wheel_axes, r'Estimated actuator authority $\hat{E}$ (fraction)'))
+
+    if config['controller']['type'] == "adaptive":
+        summary.append(('control_adaptive_model_output', ['none'], r'Adaptive model output $\theta_m$ (rad)'))
+        summary.append(('control_theta', xyz_axes, r'Adaptive parameter $\hat{\theta}$'))
+
+    detail.append(('q_sat_ref', q_axes, r'Reference quaternion $q_d$'))
+    detail.append(('q_sat_error', q_axes, r'Quaternion error $q_e$ (satellite to reference)'))
+    detail.append(('w_sat_ref', xyz_axes, r'Reference angular velocity $\omega_d$ (rad/s)'))
+    detail.append(('w_sat_error', xyz_axes, r'Angular velocity error $\omega_e$ (rad/s)'))
+    detail.append(('euler_axis_sat_error_deg', ['none'], r'Principal axis angle error $\theta_e$ (deg)'))
+    detail.append(('T_magt', xyz_axes, r'Magnetorquer torque $T_m$ ($\mathrm{N \cdot m}$)'))
+    detail.append(('m_magt', xyz_axes, r'Magnetorquer moment $m$ ($\mathrm{A \cdot m^2}$)'))
+    detail.append(('B_eci', xyz_axes, r'Magnetic field ECI $B$ (T)'))
+    detail.append(('H_total', xyz_axes, r'Total angular momentum $H$ ($\mathrm{N \cdot m \cdot s}$)'))
+    detail.append(('H_norm', ['none'], r'Total angular momentum norm $\|H\|$ ($\mathrm{N \cdot m \cdot s}$)'))
+
+    detail.append(('s_sat_eci', xyz_axes, r'Satellite position ECI $s$ (km)'))
+    detail.append(('v_sat_eci', xyz_axes, r'Satellite velocity ECI $v$ (km/s)'))
+    detail.append(('n_sun', xyz_axes, r'Sun vector $n_s$ (unitless)'))
+    detail.append(('n_nadir', xyz_axes, r'Nadir vector $n_n$ (unitless)'))
+
+    if config['satellite']['mode'] == "nominal_night":
+        # Boresight (body +z) to nadir angle - the pointing metric this mode
+        # is tracking, with the (unactuated) yaw about the boresight excluded.
+        detail.append(('boresight_nadir_error_deg', ['none'],
+                       r'Boresight (body $z$) to nadir angle $\theta_{bn}$ (deg)'))
+
+    if config['controller']['type'] == "backstepping":
+        sub_type = config['controller'].get('sub_type', '')
+        # Nadafi auxiliary variables
+        if sub_type.startswith("Nadafi"):
+            detail.append(('F', xyz_axes, r'$F$ ($\mathrm{rad/s^2}$)'))
+            detail.append(('Z_norm', ['none'], r'$\|Z\|$ (rad/s)'))
+            detail.append(('Z', xyz_axes, r'$Z$ (rad/s)'))
+            detail.append(('term_1', xyz_axes, r'$u_1$ ($\mathrm{N \cdot m}$)'))
+            detail.append(('term_2', xyz_axes, r'$u_2$ ($\mathrm{N \cdot m}$)'))
+            detail.append(('v_0', xyz_axes, r'$v_0$ (rad/s)'))
+            detail.append(('chi_0', xyz_axes, r'$\chi_0$ (rad/s)'))
+            detail.append(('chi_1', xyz_axes, r'$\chi_1$ ($\mathrm{rad/s^2}$)'))
+            # detail.append(('chi_0_error', xyz_axes, r'$\chi_{0e}$ ($\mathrm{rad/s}$)'))
+            detail.append(('chi_1_error', xyz_axes, r'$\chi_{1e}$ ($\mathrm{rad/s^2}$)'))
+            detail.append(('mu', xyz_axes, r'$\mu$ (rad/s)'))
+        # Zarourati underactuated auxiliary variables
+        if sub_type.startswith("Zarourati"):
+            detail.append(('xi', ['none'], r'$\xi$ (unitless)'))
+            detail.append(('eta_norm', ['none'], r'$\|\eta\|$ (unitless)'))
+            detail.append(('kappa1', ['none'], r'$\kappa_1$ (unitless)'))
+            detail.append(('kappa2', ['none'], r'$\kappa_2$ (unitless)'))
+            detail.append(('we_u', ['none'], r'$\omega_{eu}$ (rad/s)'))
+            detail.append(('dwe_u', ['none'], r'$\dot{\omega}_{eu}$ ($\mathrm{rad/s^2}$)'))
+            detail.append(('eta', xyz_axes, r'$\eta$ (unitless)'))
+            detail.append(('phi_hat', ['none'], r'$\hat{\phi}$ (unitless)'))
+
+    return summary, detail
+
+#! @brief Add the lumped body-frame disturbance acceleration d that chi_1 should converge to
+# Wheel torque enters the body dynamics as -D @ dH_wheels (satellite.py), and the
+# FNDO's known model carries the *commanded* torque with that same minus sign, so
+# the per-wheel fault torque f_wheels appears in the residual as -J^-1 @ D @ f_wheels.
+# f_wheels is per-wheel, so it must be mapped to the body through D first.
+# T_magt is not in the FNDO's known model either, so it lands in chi_1 too. It is
+# not negligible whenever the magnetorquers are actively dumping momentum, but it
+# is left out here (see the commented term below).
+# Columns are added in place; a run whose log lacks the inputs is left untouched.
+def calc_lumped_disturbance(results_data, config):
+    num_wheels, D = get_wheel_layout(config)
+    needed = ['T_dist_' + axis for axis in xyz_axes] + [f'f_wheels_{i}' for i in range(num_wheels)]
+    if any(column not in results_data for column in needed):
+        print(f"calc_lumped_disturbance: missing columns {needed}, skipping")
+        return results_data
+
+    inertia = np.asarray(config['satellite']['M_Inertia'])
+    f_wheels_body = results_data[[f'f_wheels_{i}' for i in range(num_wheels)]].to_numpy() @ np.asarray(D).T
+    d = results_data[['T_dist_' + axis for axis in xyz_axes]].to_numpy() \
+        - f_wheels_body
+    results_data[['d_' + axis for axis in xyz_axes]] = d @ np.linalg.inv(inertia).T
+    results_data[['chi_1_error_' + axis for axis in xyz_axes]] = results_data[['chi_1_' + axis for axis in xyz_axes]].to_numpy() \
+    - results_data[['d_' + axis for axis in xyz_axes]].to_numpy()
+    return results_data
+
+#! @brief Create every standard plot for a run: the summary sheet, the per-signal
+#         graphs and the measured-vs-estimated comparisons.
+# @param results_data: results dataframe, either live or read back from a log csv
+# @param config: the run's config dict
+def create_results_plots(results_data,
+                         config,
+                         LOG_FILE_NAME,
+                         LOG_DIR,
+                         cols = 2,
+                         show = False
+                         ):
+    summary_rows, detail_rows = build_results_plots(config)
+
+    create_plots_separated(summary_rows, results_data, config, LOG_FILE_NAME, LOG_DIR)
+    create_plots_combined(summary_rows, cols, results_data, config, LOG_FILE_NAME, LOG_DIR)
+    create_plots_separated(detail_rows, results_data, config, LOG_FILE_NAME, LOG_DIR)
+    create_3D_quaternion_plot(results_data, config, LOG_FILE_NAME, LOG_DIR)
+
+    create_plots_comparison([('q_sat', q_axes), ('q_sat_ref', q_axes)],
+                            r'Quaternion $q$', 'q_sat_vs_ref',
+                            results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+    create_plots_comparison([('q_sat', xyz_axes), ('q_sat_ref', xyz_axes)],
+                            r'Quaternion $q$', 'q_sat_vs_ref_vec',
+                            results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+
+    if config['satellite']['wheels_control_enable'] and config['observer']['enable']:
+        num_wheels, _ = get_wheel_layout(config)
+        wheel_axes = [str(i) for i in range(num_wheels)]
+        create_plots_comparison([('w_wheels', wheel_axes), ('w_wheels_est', wheel_axes)],
+                                r'Wheel speed $\omega_w$ (rad/s)', 'wheels_speed_meas_vs_est',
+                                results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+        create_plots_comparison([('T_wheels', wheel_axes), ('T_wheels_est', wheel_axes)],
+                                r'Wheel torque $T_w$ ($\mathrm{N \cdot m}$)', 'wheels_torque_meas_vs_est',
+                                results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+        create_plots_comparison([('E', wheel_axes), ('E_est', wheel_axes)],
+                                r'Wheel effectiveness $E$ (fraction)', 'wheels_authority_meas_vs_est',
+                                results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+
+    if config['controller'].get('sub_type', '').startswith("Nadafi"):
+        calc_lumped_disturbance(results_data, config)
+        create_plots_comparison([('chi_1', xyz_axes), ('d', xyz_axes)],
+                                r'Angular acceleration ($\mathrm{rad/s^2}$)', 'chi_1_vs_d',
+                                results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+        create_plots_comparison([('chi_0', xyz_axes), ('w_sat_error', xyz_axes)],
+                                r'Angular velocity (rad/s)', 'chi_0_vs_w_sat_error',
+                                results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
