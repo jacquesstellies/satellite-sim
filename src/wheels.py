@@ -173,25 +173,7 @@ class WheelModule():
     def __init__(self, config,faults=None):
         self.layout = config['wheels']['config']
         self.config = config
-        if self.layout == "ortho":
-            self.num_wheels = 3
-            self.D = np.eye(3)
-        elif self.layout == "pyramid":
-            self.num_wheels = 4
-            self.D = np.array([ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],])
-
-        elif self.layout ==  "tetra":
-            self.num_wheels = 4
-            self.D = np.array([[0.9428,-0.4714,-0.4714,0],
-                            [0,0.8165,-0.8165,0],
-                            [-0.3333,-0.3333,-0.3333,1]])
-        elif self.layout == "custom":
-            self.num_wheels = config['wheels']['num_wheels']
-            self.D = np.array(config['wheels']['D'])
-            if self.D.shape[1] != self.num_wheels or self.D.shape[0] != 3:
-                raise(Exception(f"invalid D matrix shape {self.D.shape}"))
-        else:
-            raise(Exception(f"{self.layout} is not a valid wheel layout. \nerror unable to set up wheel layout"))
+        self.num_wheels, self.D = my_utils.get_wheel_layout(config)
         
         self.wheels = [Wheel(config,faults,i) for wheel, i in enumerate(range(self.num_wheels))]
         for i, wheel in enumerate(self.wheels):
