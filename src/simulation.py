@@ -161,8 +161,8 @@ class Simulation:
         # q_sat columns hold the passive q_BI. scipy from_quat treats a quaternion as an
         # ACTIVE rotation, so .inv() recovers the passive attitude matrix A(q_BI)=T_BI
         # (v_B = T_BI v_I); its 3-2-1 Euler angles are the body attitude.
-        r_sat =  Rotation.from_quat(quat=q_sat.T).inv()
-        [self.results_df['e321_sat_yaw'],self.results_df['e321_sat_pitch'], self.results_df['e321_sat_roll']] = r_sat.as_euler('zyx', degrees=True).T
+        r_sat_active =  Rotation.from_quat(quat=q_sat.T)
+        [self.results_df['e321_sat_yaw'],self.results_df['e321_sat_pitch'], self.results_df['e321_sat_roll']] = r_sat_active.as_euler('ZYX', degrees=True).T
 
         q_sat_ref = np.array([self.results_df["q_sat_ref_x"],
                               self.results_df["q_sat_ref_y"],
@@ -173,6 +173,7 @@ class Simulation:
 
         # Body-frame error (matrix T_BR); as_quat matches the controller's passive q_RB
         # = my_utils.quat_error(q_RI, q_BI) exactly (verified).
+        r_sat =  Rotation.from_quat(quat=q_sat.T).inv()
         r_sat_error = r_sat * r_sat_ref.inv()
 
         [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = r_sat_error.as_quat().T
