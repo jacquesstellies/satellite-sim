@@ -258,13 +258,13 @@ def get_quaternion_error_bong_wie(qc : np.quaternion, qd : np.quaternion):
         @ np.array([qd.x, qd.y, qd.z, qd.w])
     return np.quaternion(qe[3], qe[0], qe[1], qe[2])
 
-def get_quaternion_error_Nadafi(qd : np.quaternion, q : np.quaternion):
+def get_quaternion_error_Nadafi(q : np.quaternion, qd : np.quaternion):
 
-    qe = np.array([[qd.w, qd.x, qd.y, qd.z],
-                   [qd.x, -1*qd.w, -1*qd.z, qd.y],
-                   [qd.y, qd.z, -1*qd.w, -1*qd.x],
-                   [qd.z, -1*qd.y, qd.x, -1*qd.w]])\
-        @ np.array([q.w, q.x, q.y, q.z])
+    qe = np.array([[q.w, q.x, q.y, q.z],
+                   [q.x, -1*q.w, -1*q.z, q.y],
+                   [q.y, q.z, -1*q.w, -1*q.x],
+                   [q.z, -1*q.y, q.x, -1*q.w]])\
+        @ np.array([qd.w, qd.x, qd.y, qd.z])
     # Scalar part >= 0 (q and -q are the same attitude) so feedback always
     # takes the short way round instead of unwinding past 180 deg.
     if qe[0] < 0:
