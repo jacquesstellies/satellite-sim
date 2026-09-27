@@ -115,7 +115,7 @@ class NadafiController:
 
     def calc_output_BS(self, q_err: np.quaternion, w : np.array, w_d : np.array, dw_d : np.array):
 
-        C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+        C = my_utils.quat_to_dcm(q_err)
         # C_r = np.array([[C[self.nf_idx[0],self.nf_idx[0]], C[self.nf_idx[0],self.nf_idx[1]]], [C[self.nf_idx[1],self.nf_idx[0]], C[self.nf_idx[1],self.nf_idx[1]]]])
         # C = my_utils.conv_quat_to_dcm_nadafi(q_err)
         C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
@@ -162,7 +162,7 @@ class NadafiController:
     def calc_output_BS_FNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array, dw_d : np.array, T_magt : np.array):
         self.nf_idx = [i for i in range(3) if i != self.f_idx] # no fault indices
 
-        C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+        C = my_utils.quat_to_dcm(q_err)
         # C_r = np.array([[C[self.nf_idx[0],self.nf_idx[0]], C[self.nf_idx[0],self.nf_idx[1]]], [C[self.nf_idx[1],self.nf_idx[0]], C[self.nf_idx[1],self.nf_idx[1]]]])
         # C = my_utils.conv_quat_to_dcm_nadafi(q_err)
         C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
@@ -235,7 +235,7 @@ class NadafiController:
     def calc_output_BS_MFNDO(self, q_err: np.quaternion, w : np.array, u_wheels_prev : np.array, w_d : np.array, dw_d : np.array):
         self.nf_idx = [i for i in range(3) if i != self.f_idx] # no fault indices
 
-        C = R.from_quat([q_err.x, q_err.y, q_err.z, q_err.w]).as_matrix()
+        C = my_utils.quat_to_dcm(q_err)
         # C_r = np.array([[C[self.nf_idx[0],self.nf_idx[0]], C[self.nf_idx[0],self.nf_idx[1]]], [C[self.nf_idx[1],self.nf_idx[0]], C[self.nf_idx[1],self.nf_idx[1]]]])
         # C = my_utils.conv_quat_to_dcm_nadafi(q_err)
         C_r = np.array([[C[0,0], C[0,1]], [C[1,0], C[1,1]]])
