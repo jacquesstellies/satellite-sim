@@ -115,7 +115,7 @@ class Satellite():
                 raise(Exception("exactly one of use_ref_euler, use_ref_q, use_ref_series must be true"))
         if self.mode == "ref_pointing":
             if config['satellite']['use_ref_euler']:
-                q_ref_array = Rotation.from_euler("xyz", config['satellite']['ref_euler'], degrees=True).as_quat()
+                q_ref_array = Rotation.from_euler("XYZ", config['satellite']['ref_euler'], degrees=True).as_quat()
                 self.q_RI = np.quaternion(q_ref_array[3], q_ref_array[0], q_ref_array[1], q_ref_array[2]) # check if valid quaternion
             elif config['satellite']['use_ref_q']:
                 self.q_RI = np.quaternion(config['satellite']['ref_q'][3], config['satellite']['ref_q'][0], config['satellite']['ref_q'][1], config['satellite']['ref_q'][2]) # check if valid quaternion
@@ -332,9 +332,9 @@ class Satellite():
                 elif self._night_interp_active:
                     if t >= self._night_interp_t1:
                         w_RI_R_prev = self.w_RI_R
-                        dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
+                        dq = 2 * self.q_RI.inverse() * new_q_RI  / self.next_t_ref_update_interval
                         self.q_RI = new_q_RI
-                        self.w_RI_R = np.array([dq.x, dq.y, dq.z])
+                        self.w_RI_R = np.array([dq.x, dq.y, dq.z]) # NB check this is reference frame coordinates
                         self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
                         self._night_interp_active = False
                     else:
@@ -400,7 +400,7 @@ class Satellite():
                         self.q_RI = new_q_RI
             else:
                 w_RI_R_prev = self.w_RI_R
-                dq = 2 * new_q_RI * self.q_RI.inverse() / self.next_t_ref_update_interval
+                dq = 2 * self.q_RI.inverse() * new_q_RI / self.next_t_ref_update_interval
                 self.q_RI = new_q_RI
                 self.w_RI_R = np.array([dq.x, dq.y, dq.z])
                 self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
