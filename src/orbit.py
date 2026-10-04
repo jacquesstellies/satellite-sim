@@ -127,6 +127,29 @@ class Orbit():
         )
 
 
+    def calc_T_OI_at(self, t_runtime):
+        """LVLH/orbit frame at an arbitrary run time, without touching orbit state.
+
+        Returns (T_OI, r_I, v_I). Same construction as calc_orbit_state uses below, kept
+        in one place so the reference planner can aim at where nadir *will* be at the end
+        of a multi-minute maneuver instead of where it is when the maneuver starts.
+        """
+        error, r, v = self.propagator.sgp4(self.jd, t_runtime/86400)
+        if error != 0:
+            raise Exception("SGP4 propagation error")
+        r = np.array(r)  # km
+        v = np.array(v)  # km/s
+        # Orthonormal LVLH/orbit (O) frame: z = nadir (-r_hat), y = -orbit-normal
+        # (-h/|h|), x = y x z (~ velocity direction). Building y from h = r x v keeps
+        # T_OI an exact rotation even when r.v != 0 under SGP4/J2 (v_hat is not exactly
+        # perpendicular to r_hat), so dcm_to_quat(T_OI) is faithful.
+        z = -r/np.linalg.norm(r)
+        h = my_utils.cross_product_M31M31(r, v)
+        y = -h/np.linalg.norm(h)
+        x = my_utils.cross_product_M31M31(y, z)
+        # Rows of the passive DCM T_OI are the O-frame axes in I coords (v_O = T_OI v_I).
+        return np.row_stack([x, y, z]), r, v
+
     next_t_sample: float = 0.0
     # orbital parameters update
     def calc_orbit_state(self, t_runtime):
@@ -139,26 +162,11 @@ class Orbit():
 
         self.fr = t_runtime/86400
 
-        error, sBT_T , DTsBT_T = self.propagator.sgp4(self.jd, self.fr) # sBT_T refers to body position in TEME frame, DTsBT_T refers to velocity in TEME frame
-
+        # sBI_I refers to body position in TEME frame, DIsBI_I to velocity in TEME frame.
         # Use astropy or manual rotation matrix for TEME->ICRF conversion
         # For now, keeping in TEME as exact conversion requires additional ephemeris data
-        # error, sBT_T , DTsBT_T = self.propagator.sgp4(self.jd, 0.0)
-        if error != 0:
-            raise Exception("SGP4 propagation error")
-        self.sBI_I = np.array(sBT_T)  # km
-        self.DIsBI_I = np.array(DTsBT_T)  # km/s
+        self.T_OI, self.sBI_I, self.DIsBI_I = self.calc_T_OI_at(t_runtime)
         self.nIB_I = -self.sBI_I/np.linalg.norm(self.sBI_I)
-        # Orthonormal LVLH/orbit (O) frame: z = nadir (-r_hat), y = -orbit-normal
-        # (-h/|h|), x = y x z (~ velocity direction). Building y from h = r x v keeps
-        # T_OI an exact rotation even when r.v != 0 under SGP4/J2 (v_hat is not exactly
-        # perpendicular to r_hat), so dcm_to_quat(T_OI) is faithful.
-        h = my_utils.cross_product_M31M31(self.sBI_I, self.DIsBI_I)
-        z = self.nIB_I
-        y = -h/np.linalg.norm(h)
-        x = my_utils.cross_product_M31M31(y, z)
-        # Rows of the passive DCM T_OI are the O-frame axes in I coords (v_O = T_OI v_I).
-        self.T_OI = np.row_stack([x, y, z])
         rSI_I, _, _ = self.calc_sun_vector_update()
 
         rSB_I = rSI_I - self.sBI_I
