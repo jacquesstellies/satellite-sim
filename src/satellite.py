@@ -192,7 +192,7 @@ class Satellite():
                             face.area *= dim_array[k]
                     face.r_com_to_cop = face.norm_vec*0.5*dim_array              
                     self.faces.append(face)
-                    print(face.norm_vec, face.area, face.r_com_to_cop)
+                    # print(face.norm_vec, face.area, face.r_com_to_cop)
         elif model == "EOSSAT":
             com_to_cop_array = [[0.0, 0.0, 0.995],
                                 [0.0, 0.0, 0.026],
@@ -313,6 +313,12 @@ class Satellite():
             # with the same smootherstep SLERP "tracking" mode uses between waypoints,
             # instead of being applied instantly.
             new_q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
+            # dcm_to_quat picks the sign of q arbitrarily (scipy), while the interp/box
+            # branches build q_RI from q_BI - keep the same hemisphere as the previous
+            # reference so q_RI stays continuous instead of flipping to -q between branches.
+            if (new_q_RI.w*self.q_RI.w + new_q_RI.x*self.q_RI.x
+                    + new_q_RI.y*self.q_RI.y + new_q_RI.z*self.q_RI.z) < 0:
+                new_q_RI = -new_q_RI
             dt = 1e-3
             if self._night_interp_enabled:
                 if self._night_box_active:
