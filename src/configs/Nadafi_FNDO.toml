@@ -27,7 +27,7 @@ ki = 50
 T_max = 1000
 T_min = 0
 filter_coef = 0
-t_sample = 0.1
+t_sample = 0.01
 type = "backstepping" # pid, backstepping, adaptive
 sub_type = "Nadafi_FNDO" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
 adaptive_gain = 0.1
@@ -78,22 +78,46 @@ friction_coef = 0.000
 saturation_enable = false
 
 [magt]
-mag_moment_max = 100 # Am2
+mag_moment_max = 20 # Am2
+dump_gain = 3e-3 # [1/s] momentum-dump gain: T_des = -dump_gain * H_total.
+# tau = m x B is always perpendicular to B, so dumping relies on B rotating in the
+# body frame (~2x orbit rate, ~2.2e-3 rad/s at LEO). dump_gain must be SLOWER than
+# that sweep rate; dump_gain ~ 1/t_sample is deadbeat and parks the residual
+# momentum exactly along B where it is unactuatable and never decays.
+dump_torque_max = 0.1 # Nm, per-axis saturation on the desired dump torque
+# Split allocation ("split_yaw_dump"): the magnetorquer serves two objectives.
+#  - dead_axis: the axis the wheels cannot actuate. Attitude there is the double
+#    integral of the dead-axis torque with no restoring term, so it gets a fast PD
+#    loop (yaw_wn well above orbit rate, well below 1/t_sample).
+#  - the other two axes: the slow isotropic momentum dump at dump_gain.
+dead_axis = 2 # body axis with no wheel authority (0=x, 1=y, 2=z)
+yaw_wn = 0.04 # rad/s, dead-axis PD natural frequency (~9x orbit rate here)
+yaw_zeta = 0.707 # dead-axis PD damping ratio
+yaw_wn_maneuver = 0.015 # rad/s, detuned dead-axis gain while the wheels run a
+# planned yaw maneuver. The wheels steer yaw by pumping (H_B)_dead through
+# -(w x H_B)_dead, which is exactly what the rate feedback damps, so the high gain
+# opposes the maneuver's only actuation path. Drop it during the maneuver, resume
+# yaw_wn for the cleanup afterwards.
 t_sample = 1
 enable = true
 # mode = "momentum_dump_z_axis_only"
-mode = "momentum_dump_xyz"
+# mode = "momentum_dump_xyz"
+mode = "split_yaw_dump"
 
+# When enabled, the mode output is a desired torque; commanded moment is
+# m = (B × T_des)/|B|², scaled down to |m| <= mag_moment_max, and applied torque is τ = m × B.
+[magt.physical]
+enable = true
 
 
 [faults]
-master_enable = true
+master_enable = false
 
 [fault.0]
 # mul_fault = [ 1.0, 1.0, 1.0, 0.0,]
 # add_fault = [ 0.0, 0.0, 0.0, 0.0,]
-# mul_fault = [ 0.65, 0.65, 0.0,]
-mul_fault = [ 1.0, 1.0, 0.0,]
+mul_fault = [ 0.65, 0.65, 0.0,]
+# mul_fault = [ 1.0, 1.0, 0.0,]
 add_fault = [ 0, 0, 0,]
 time = 0
 master_enable = true
@@ -155,15 +179,20 @@ sinusoidal_ref_frequency = [ 0.05, 0.05, 0.0,]
 
 w_init_dps = [0, 0, 0,]
 wheels_control_enable = true
-mass = 12
+mass = 91
 # M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
 # M_Inertia = [ [ 50.0, 1.2, 0.5,], [ 1.2, 50.0, 1.5,], [ 0.5, 1.5, 50.0,],]
 M_Inertia = [ [ 2.5, 0.0, 0.0,], [ 0.0, 3.5, 0.0,], [ 0.0, 0.0, 4.5,], ]
 
 # Preserves the previously hard-coded plant uncertainty Delta J = [2, 2.8, 3.6] kg.m2
 # = 0.8 * diag(J) (now config-driven; defaults to 0 when absent).
-delta_inertia_frac = 0.8
+delta_inertia_frac = 0.0
 delta_inertia_freq = [ 0.1, 0.2, 0.3 ]
+
+nominal_night_yaw_maneuver_enable = true
+nominal_night_yaw_max_tilt_deg = 20
+nominal_night_yaw_leg_duration = 20
+nominal_night_interp_threshold_deg = 1
 
 [orbit]
 altitude_km = 500 # km
@@ -173,6 +202,8 @@ t_sample = 0.1
 enable = true
 # model = "Nadafi"
 model = "realistic"
+rho_s = 0.6 # specular reflectivity for SRP torque (aluminised Mylar)
+dipole_Am2 = [0.1, 0.1, 0.1,] # [Am2] magnetorquer dipole moment along each body axis
 
 [output]
 accuracy_enable = true
@@ -190,10 +221,10 @@ file_path = "/opt/satellite-visualizer/dist/telemetry.json"
 t_sample = 1.0
 
 [satellite.dimensions]
-model="EOSSAT" # rectangular, EOSSAT
-x = 0.3
-y = 0.3
-z = 0.3
+model="rectangular" # rectangular, EOSSAT
+x = 0.60
+y = 0.48
+z = 0.31
 
 
 [FDIR.wheels]
