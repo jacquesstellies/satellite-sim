@@ -141,7 +141,7 @@ class Simulation:
                 self.results_data[key] = np.interp(self.sim_time_series, self.results_data['time'], value)[:]
             
         for key, value in self.results_data.items():
-            if len(value) != len(self.sim_time_series):
+            if len(value) != len(self.sim_time_series) and key != 'time':
                 self.logger.log(f"Warning: {key} has length {len(value)} but time has length {len(self.sim_time_series)}")
         
         self.results_data['time'] = self.sim_time_series
@@ -195,12 +195,12 @@ class Simulation:
         self.results_df['boresight_nadir_error_deg'] = np.degrees(
             np.arccos(np.clip(n_nadir_B[:, 2], -1.0, 1.0)))
 
-        if use_only_sol == False:
-            for i, wheel in enumerate(self.satellite.wheel_module.wheels):
-                self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
-                # self.results_df['T_wheels_est'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
-            for i, wheel in enumerate(self.satellite.wheel_module.wheels):
-                self.results_df[f'f_wheels_error_{i}'] = self.results_df[f'f_wheels_{i}'] - self.results_df[f'f_wheels_est_{i}']
+        # if use_only_sol == False:
+        for i, wheel in enumerate(self.satellite.wheel_module.wheels):
+            self.results_data[f'H_wheels_{str(i)}'] = self.results_data['w_wheels_' + str(i)]*wheel.M_inertia_fast
+            
+            self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
+            self.results_df[f'f_wheels_error_{str(i)}'] = self.results_df[f'f_wheels_{str(i)}'] - self.results_df[f'f_wheels_est_{str(i)}']
 
         self.results_df['H_norm'] = np.sqrt(self.results_df['H_total_x']**2 + self.results_df['H_total_y']**2 + self.results_df['H_total_z']**2)
 
