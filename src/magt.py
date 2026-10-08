@@ -125,7 +125,7 @@ class MagtModule():
             self.T = np.zeros(3)
             self.m = np.zeros(3)
             return
-        if self.physical and self.t_sample > 0.0 and t < self.next_t_sample:
+        if self.physical and self.t_sample > 0.0 and t < self.next_t_sample - my_utils.T_EPS:
             return
         if self.physical and self.t_sample > 0.0:
             self.next_t_sample = t + self.t_sample

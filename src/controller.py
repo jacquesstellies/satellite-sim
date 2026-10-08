@@ -925,7 +925,7 @@ class Controller:
 
     next_t_sample : float = 0
     def calc_torque_control_output(self, t, q_BI : np.quaternion,  w_BI_B : np.array, q_RI : np.quaternion, satellite, w_wheels : np.array, f_est : np.array) -> np.array:
-        if t >= self.next_t_sample:
+        if t >= self.next_t_sample - my_utils.T_EPS:
             self.next_t_sample += self.t_sample
         else:
             return self.u_vec_prev, self.u_wheels_prev

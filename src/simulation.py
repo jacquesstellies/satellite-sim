@@ -14,6 +14,7 @@ from scipy.integrate import solve_ivp, cumulative_trapezoid
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 import time
+from types import SimpleNamespace
 import os
 import control
 import toml
@@ -79,22 +80,85 @@ class Simulation:
         for entry in self.results_data:
             entry.clear()
 
+    def _base_tick(self):
+        """Fastest enabled discrete rate; every enabled block's t_sample must be an
+        integer multiple of it so all gates fire exactly on tick times."""
+        sat = self.satellite
+        rates = {'controller': sat.controller.t_sample}
+        if self.config['observer']['enable']:
+            rates['observer'] = sat.observer_module.t_sample
+        if sat.fault_detector is not None:
+            rates['detection'] = sat.fault_detector.t_sample
+        if sat.orbit.enable:
+            rates['orbit'] = sat.orbit.t_sample
+        if sat.magt_module.enable and sat.magt_module.physical and sat.magt_module.t_sample > 0.0:
+            rates['magt'] = sat.magt_module.t_sample
+        Ts = min(rates.values())
+        for name, rate in rates.items():
+            ratio = rate / Ts
+            if abs(ratio - round(ratio)) > 1e-6:
+                raise ValueError(f"{name}.t_sample = {rate} is not an integer multiple of the "
+                                 f"base tick {Ts} (sampled integrator needs commensurate rates)")
+        return Ts
+
+    def _simulate_sampled(self):
+        """Sampled-data loop: discrete blocks run once per tick on the accepted state,
+        then the continuous plant is integrated over the tick with the inputs held
+        (zero-order hold) using fixed-step RK4."""
+        Ts = self._base_tick()
+        substeps = int(self.config['simulation'].get('integrator_substeps', 1))
+        h = Ts / substeps
+        # tanh Coulomb friction is a stiff mode near w = 0 with rate T_c/(I_w*w_s); keep
+        # rate*h well inside RK4's stability region or zero-speed crossings are inaccurate
+        for wheel in self.satellite.wheel_module.wheels:
+            if wheel.coulomb_torque != 0.0:
+                coulomb_gain = wheel.coulomb_torque / (wheel.M_inertia_fast * wheel.coulomb_smoothing_speed) * h
+                if coulomb_gain > 0.5:
+                    w_s_min = 2.0 * wheel.coulomb_torque * h / wheel.M_inertia_fast
+                    print(f"WARNING: wheel {wheel.index} Coulomb friction step gain {coulomb_gain:.2f} > 0.5, "
+                          f"increase coulomb_smoothing_speed to >= {w_s_min:.3g} rad/s or integrator_substeps")
+        n_ticks = int(round(self.sim_time / Ts))
+        rates = self.satellite.plant_rates
+
+        x = np.array(self.initial_values, dtype=float)
+        t_out = np.arange(n_ticks + 1) * Ts
+        y_out = np.empty((len(x), n_ticks + 1))
+        y_out[:, 0] = x
+        for k in range(n_ticks):
+            t = k * Ts
+            self.satellite.discrete_update(t, x)
+            for j in range(substeps):
+                tj = t + j * h
+                k1 = rates(tj, x)
+                k2 = rates(tj + h/2, x + h/2 * k1)
+                k3 = rates(tj + h/2, x + h/2 * k2)
+                k4 = rates(tj + h, x + h * k3)
+                x = x + h/6 * (k1 + 2*k2 + 2*k3 + k4)
+            x[3:7] /= np.linalg.norm(x[3:7])
+            y_out[:, k + 1] = x
+        return SimpleNamespace(t=t_out, y=y_out, status=0, success=True)
+
+    def _integrate(self, max_step):
+        if self.config['simulation'].get('integrator', 'rk45') == 'sampled':
+            return self._simulate_sampled()
+        # first_step pins scipy's automatic initial-step heuristic, which otherwise proposes
+        # a trial evaluation up to t_bound away when the initial state rates are ~0 (e.g. the
+        # satellite starts at rest exactly on the reference). That stray far-future call to
+        # calc_state_rates permanently advances Satellite.next_t_ref_update past the whole
+        # sim, freezing the reference generator for the rest of the run.
+        return solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
+                         t_eval=self.sim_time_series,
+                         max_step=max_step, first_step=max_step)
+
     def simulate(self):
         t_monotonic_start_unix = time.time()
         if self.config['observer']['enable'] is True:
             max_step = np.min([self.satellite.controller.t_sample, self.satellite.observer_module.t_sample])
         else:
             max_step = self.satellite.controller.t_sample
-        
+
         self.sim_time_series = np.arange(0, self.sim_time, max_step)
-        # first_step pins scipy's automatic initial-step heuristic, which otherwise proposes
-        # a trial evaluation up to t_bound away when the initial state rates are ~0 (e.g. the
-        # satellite starts at rest exactly on the reference). That stray far-future call to
-        # calc_state_rates permanently advances Satellite.next_t_ref_update past the whole
-        # sim, freezing the reference generator for the rest of the run.
-        sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
-                        t_eval=self.sim_time_series,
-                        max_step=max_step, first_step=max_step)
+        sol = self._integrate(max_step)
 
         # Integrate satellite dynamics over time
         t_monotonic_end_unix = time.time()
@@ -109,10 +173,7 @@ class Simulation:
             max_step = self.satellite.controller.t_sample
         self.sim_time_series = np.arange(0, self.sim_time, max_step)
         try:
-            # see simulate() re: first_step
-            sol = solve_ivp(fun=self.satellite.calc_state_rates, t_span=[0, self.sim_time], y0=self.initial_values, method="RK45",
-                            t_eval=self.sim_time_series,
-                            max_step=max_step, first_step=max_step)
+            sol = self._integrate(max_step)
         except DivergentRate:
             # print("divergent rate hit")
             return -1

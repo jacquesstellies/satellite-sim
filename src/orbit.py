@@ -155,7 +155,7 @@ class Orbit():
     def calc_orbit_state(self, t_runtime):
         if not self.enable:
             return
-        if t_runtime >= self.next_t_sample:
+        if t_runtime >= self.next_t_sample - my_utils.T_EPS:
             self.next_t_sample = t_runtime + self.t_sample
         else:
             return

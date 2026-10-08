@@ -220,7 +220,7 @@ class FNDOFaultDetector():
         self.reconfigured = False
 
     def update(self, t, w, u_wheels, H_wheels_vec, T_magt, T_dist=None):
-        if t >= self.next_t_sample:
+        if t >= self.next_t_sample - my_utils.T_EPS:
             self.next_t_sample += self.t_sample
         else:
             return
@@ -313,7 +313,7 @@ class ObserverModule():
     next_t_sample = 0
     dE = 0
     def calc_state_estimates(self, t : float, state : list[float], u_wheels : list[float]):
-        if t >= self.next_t_sample:
+        if t >= self.next_t_sample - my_utils.T_EPS:
             # if self.config['simulation']['test_mode_en'] is True:
             #     print("Observer t:", t)
             self.next_t_sample += self.t_sample

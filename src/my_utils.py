@@ -11,6 +11,9 @@ q_axes = ['x', 'y', 'z', 'w']
 
 RAD_TO_DEG = 180/np.pi
 DEG_TO_RAD = np.pi/180
+# Sample-gate tolerance: discrete blocks gate on t >= next_t_sample - T_EPS so a
+# tick at exactly k*Ts never misses its update to float rounding in next_t_sample.
+T_EPS = 1e-6
 RPM_TO_RAD_PER_SEC = np.pi/30
 RAD_PER_SEC_TO_RPM = 30/np.pi
 

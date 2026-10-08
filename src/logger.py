@@ -118,7 +118,7 @@ class Logger:
 
     def store_data(self, t):
         if self.enable and self.initialized:
-            if t >= self.next_timestamp:
+            if t >= self.next_timestamp - my_utils.T_EPS:
                 # print("logging data")
                 self.results_data['time'].append(t)
                 self.results_data['jd'].append(self.satellite.orbit.jd + self.satellite.orbit.fr)

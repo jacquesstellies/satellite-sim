@@ -537,9 +537,7 @@ class Satellite():
     f_wheels = None
     def calc_state_rates(self, t, y):
 
-        self.w_BI_B = np.array(y[:3])
-        self.q_BI = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
-        w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
+        w_wheels_input = self._set_state(y)
         # Passive body DCM T_BI: v_B = T_BI @ v_I  (used by the disturbance models).
         T_BI = my_utils.quat_to_dcm(self.q_BI)
 
@@ -577,8 +575,25 @@ class Satellite():
             self.E = self.fault_module.E
         #### Calculate state rates for satellite various subsystems
 
+        body_rates = self._calc_body_rates(t, T_BI)
+
+        self.fault_module.update(t)
+        self.update_FDIR(t)
+
+        self.logger.store_data(t)
+
+        return np.hstack([body_rates, self.wheel_module.dw_wheels])
+
+    def _set_state(self, y):
+        self.w_BI_B = np.array(y[:3])
+        self.q_BI = np.quaternion(y[6],y[3],y[4],y[5]).normalized()
+        return y[10:self.wheel_module.num_wheels + 10]
+
+    def _calc_body_rates(self, t, T_BI):
+        """Rigid-body dynamics + kinematics given the current wheel rates and held
+        actuator outputs. Returns [dw_BI_B, dq_BI (xyzw), control_power]."""
         self.T_dist = self.disturbances.calc_torque(self, T_BI, t)
-        
+
         delta_M_inertia = self.calc_delta_M_inertia(t)
         M_inertia_effective = self.M_inertia + delta_M_inertia
         M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
@@ -596,13 +611,55 @@ class Satellite():
         dq_BI = 0.5*self.q_BI*w_BI_B_quat
         dq_BI = [dq_BI.x, dq_BI.y, dq_BI.z, dq_BI.w]
         control_power = abs(self.wheel_module.dH_vec * self.w_BI_B) ## @TODO fix this
-        
+        return np.hstack([self.dw_BI_B, dq_BI, control_power])
+
+    def plant_rates(self, t, y):
+        """Continuous plant only (sampled-data integrator). Controller wheel torques,
+        magnetorquer torque and fault state are held from the last discrete_update
+        (zero-order hold), so this is safe to evaluate at any RK stage."""
+        w_wheels_input = self._set_state(y)
+        T_BI = my_utils.quat_to_dcm(self.q_BI)
+        self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
+        body_rates = self._calc_body_rates(t, T_BI)
+        return np.hstack([body_rates, self.wheel_module.dw_wheels])
+
+    def discrete_update(self, t, y):
+        """All sampled blocks, run once per base tick on the accepted state y(t). Each
+        block still gates itself on its own t_sample; the integrator guarantees t lands
+        exactly on tick times, so the gates fire deterministically."""
         self.fault_module.update(t)
+        # refresh derived plant quantities (H_vec, H_total, T_dist, ...) from the
+        # accepted state - the last RK stage left them at a trial state
+        self.plant_rates(t, y)
+        w_wheels_input = y[10:self.wheel_module.num_wheels + 10]
+        T_BI = my_utils.quat_to_dcm(self.q_BI)
+
+        self.orbit.calc_orbit_state(t)
+        self.update_ref_q(t)
+
+        if self.controller.enable is True:
+            if self.config['observer']['feedback_en']:
+                f_est = self.wheel_module.D@self.observer_module.f_wheels_est
+            else:
+                f_est = np.zeros(3)
+            self.T_ctr_vec, self.T_ctr_wheels = self.controller.calc_torque_control_output(t, self.q_BI, self.w_BI_B, self.q_RI, self, w_wheels_input, f_est)
+
+        q_RB =  my_utils.quat_error(self.q_RI, self.q_BI)
+        qv_RB = np.array([q_RB.x, q_RB.y, q_RB.z])
+        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI)
+
+        # derived quantities consistent with the new held inputs (logging, observers)
+        self.plant_rates(t, y)
+
+        self.f_wheels = (self.fault_module.E - np.eye(self.wheel_module.num_wheels)) @ self.T_ctr_wheels \
+            + self.fault_module.u_a
+
+        if self.observer_module.enable is True:
+            self.E_est = self.observer_module.calc_state_estimates(t, w_wheels_input, self.T_ctr_wheels)
+            self.E = self.fault_module.E
+
         self.update_FDIR(t)
-
         self.logger.store_data(t)
-
-        return np.hstack([self.dw_BI_B, dq_BI, control_power, self.wheel_module.dw_wheels])
 
     
     def update_fd(self, t):
