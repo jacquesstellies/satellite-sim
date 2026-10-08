@@ -137,7 +137,7 @@ class Satellite():
                     raise(Exception("simulation duration must be longer than last time in t_ref_series"))
             else:
                 raise(Exception("no reference angle commanded"))
-        if self.mode == "tracking":
+        elif self.mode == "tracking":
             q_series = self.config['satellite']['ref_q_series']   # each [x, y, z, w]
             t_series = self.config['satellite']['ref_t_series']
             rots = [Rotation.from_quat(q) for q in q_series]
