@@ -11,6 +11,8 @@ tuning = false
 input_type="ref" # ref, ref_square, torque, sine, square
 log_enable = true
 verbose = true
+integrator = "sampled"      # rk45 (legacy: discrete blocks run inside the RHS) | sampled (fixed-step RK4, discrete blocks once per tick)
+integrator_substeps = 1  # sampled only: RK4 steps per base tick
 
 [controller]
 enable = true
