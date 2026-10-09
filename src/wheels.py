@@ -19,6 +19,8 @@ class Wheel():
     position = np.zeros(3)
     d = np.zeros(3) # direction vector
     friction_coef = 0.0
+    coulomb_torque = 0.0
+    coulomb_smoothing_speed = 0.1
     config = None
     index = 0
 
@@ -47,6 +49,11 @@ class Wheel():
         self.index = index
         self.t_sample = self.config['controller']['t_sample']
         self.friction_coef = self.config['wheels']['friction_coef']
+        # tanh-smoothed Coulomb friction: T_c*tanh(w/w_s). A hard sign(w) chatters across
+        # zero speed under fixed-step integration; w_s sets the width of the smoothing
+        # (see Simulation._simulate_sampled for the step-size check).
+        self.coulomb_torque = self.config['wheels'].get('coulomb_torque', 0.0)
+        self.coulomb_smoothing_speed = self.config['wheels'].get('coulomb_smoothing_speed', 0.1)
         self.fd_inst_time_threshold = self.config['FDIR']['wheels']['inst_time_threshold']
         self.fd_inst_count_threshold = self.config['FDIR']['wheels']['inst_count_threshold']
         if self.config['wheels']['use_inertia']:
@@ -94,11 +101,14 @@ class Wheel():
 
             
         # Calculate the new wheel speed derivative
-        self.dw = (u - self.friction_coef*self.w)*self.M_inertia_inv_fast
+        T_friction = self.friction_coef*self.w
+        if self.coulomb_torque != 0.0:
+            T_friction += self.coulomb_torque*np.tanh(self.w/self.coulomb_smoothing_speed)
+        self.dw = (u - T_friction)*self.M_inertia_inv_fast
         
-        # if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
-        #     print("wheel speed limit reached")
-        #     self.dw = 0
+        if (self.w >= self.w_max and self.dw > 0) or (self.w <= -self.w_max and self.dw < 0):
+            # print("wheel speed limit reached")
+            self.dw = 0
         
         self.dH = self.dw*self.M_inertia_fast
         self.H = self.w*self.M_inertia_fast

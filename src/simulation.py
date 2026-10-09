@@ -258,9 +258,8 @@ class Simulation:
 
         # if use_only_sol == False:
         for i, wheel in enumerate(self.satellite.wheel_module.wheels):
-            self.results_data[f'H_wheels_{str(i)}'] = self.results_data['w_wheels_' + str(i)]*wheel.M_inertia_fast
-            
-            self.results_data[f'T_wheels_est_{str(i)}'] = self.results_data['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
+            self.results_df[f'H_wheels_{str(i)}'] = self.results_df['w_wheels_' + str(i)]*wheel.M_inertia_fast
+            self.results_df[f'T_wheels_est_{str(i)}'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
             self.results_df[f'f_wheels_error_{str(i)}'] = self.results_df[f'f_wheels_{str(i)}'] - self.results_df[f'f_wheels_est_{str(i)}']
 
         self.results_df['H_norm'] = np.sqrt(self.results_df['H_total_x']**2 + self.results_df['H_total_y']**2 + self.results_df['H_total_z']**2)
@@ -315,8 +314,9 @@ class Simulation:
         self.logger.log(f"control energy (J): {round(self.control_energy_total,3)}")
         self.logger.log(f"final euler: {self.final_euler} deg xyz", to_results_file=True, to_console=True)
         self.logger.log(f"euler error: {self.euler_error} deg xyz", to_results_file=True, to_console=True)
-        self.logger.log(f"principal angle error: {self.prin_error*180/np.pi} deg", to_results_file=True, to_console=True)
-        self.logger.log(f"steady state value: {self.steady_state} deg", to_results_file=True, to_console=True)
+        if self.prin_error is not None:
+            self.logger.log(f"principal angle error: {self.prin_error*180/np.pi} deg", to_results_file=True, to_console=True)
+            self.logger.log(f"steady state value: {self.steady_state} deg", to_results_file=True, to_console=True)
         with open(fr'{LOG_FOLDER_PATH}/{LOG_FILE_NAME + "_log"}.csv', 'w+') as file:
             self.results_df.to_csv(file,sep=',')
         output_toml_to_file(LOG_FOLDER_PATH, LOG_FILE_NAME + "_config", self.config)

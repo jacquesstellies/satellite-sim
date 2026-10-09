@@ -2,7 +2,7 @@ debug_log = false
 
 [simulation]
 enable = true
-duration = 100
+duration = 500
 test_mode_en = false
 test_duration = 3
 test_resolution = 1
@@ -12,7 +12,7 @@ input_type="ref" # ref, ref_square, torque, sine, square
 log_enable = true
 verbose = true
 integrator = "sampled"      # rk45 (legacy: discrete blocks run inside the RHS) | sampled (fixed-step RK4, discrete blocks once per tick)
-integrator_substeps = 1  # sampled only: RK4 steps per base tick
+integrator_substeps = 5  # sampled only: RK4 steps per base tick
 
 [tuning]
 iterations = 30
@@ -23,15 +23,15 @@ postive_bounds_en = false
 enable = true
 c = [ 1, 1, 1,]
 k = 2
-kj = 0.02
-kd = 0.2
-ki = 0
+kj = 2
+kd = 4
+ki = 50
 T_max = 1000
 T_min = 0
 filter_coef = 0
-t_sample = 0.01
-type = "pid" # pid, backstepping, adaptive
-sub_type = "" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
+t_sample = 0.1
+type = "backstepping" # pid, backstepping, adaptive
+sub_type = "Nadafi_FNDO" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
 adaptive_gain = 0.1
 detection_en = true
 
@@ -46,11 +46,23 @@ c_2 = 0.1
 
 [Nadafi]
 ## ORIGINAL DONT CHANGE
-Gamma_z11 = 1.5
-Gamma_z22 = 1.2 
-lambda_1 = 3
-lambda_2 = 3
-lambda_3 = 6
+# Gamma_z11 = 1.5
+# Gamma_z22 = 1.2 
+# lambda_1 = 3
+# lambda_2 = 3
+# lambda_3 = 6
+# kappa_0 = 0.1 
+# kappa_1 = 0.15
+# L11 = 10.0
+# L22 = 10.0
+# Gamma_mu11 = 0.05
+# Gamma_mu22 = 0.05
+
+Gamma_z11 = 0.476
+Gamma_z22 = 0.476
+lambda_1 = 0.124  
+lambda_2 = 0.124
+lambda_3 = 0.248
 kappa_0 = 0.1 
 kappa_1 = 0.15
 L11 = 10.0
@@ -62,7 +74,7 @@ Gamma_mu22 = 0.05
 [observer]
 enable = false
 feedback_en = false
-t_sample = 0.1
+t_sample = 0.01
 gain = [ 3.00, 0.005, 0.000 ]
 
 [wheels]
@@ -77,35 +89,51 @@ max_torque = 0.1
 num_wheels = 3
 D = [ [ -1, -1, 1, 1,], [ 1, -1, -1, 1,], [ 1, 1, 1, 1,],]
 friction_coef = 1e-5
-coulomb_torque = 0.0            # Nm, Coulomb friction magnitude T_c (0 = off)
-coulomb_smoothing_speed = 0.1   # rad/s, tanh width w_s; sampled integrator needs w_s >= 2*T_c*h/I_w
+coulomb_torque = 0.88e-3            # Nm, Coulomb friction magnitude T_c (0 = off)
+coulomb_smoothing_speed = 0.06   # rad/s, tanh width w_s; sampled integrator needs w_s >= 2*T_c*h/I_w
 saturation_enable = true
 
 [magt]
-mag_moment_max = 20 # Am2
-dump_gain = 1.0 # [1/s] momentum-dump gain: T_des = -dump_gain * H_total.
+mag_moment_max = 17 # Am2
+# dump_gain = 1.0 # [1/s] momentum-dump gain: T_des = -dump_gain * H_total.
+dump_gain = 0.04 # [1/s] momentum-dump gain: T_des = -dump_gain * H_total.
 # tau = m x B is always perpendicular to B, so dumping relies on B rotating in the
 # body frame (~2x orbit rate, ~2.2e-3 rad/s at LEO). dump_gain must be SLOWER than
 # that sweep rate; dump_gain ~ 1/t_sample is deadbeat and parks the residual
 # momentum exactly along B where it is unactuatable and never decays.
 dump_torque_max = 0.1 # Nm, per-axis saturation on the desired dump torque
+# Split allocation ("split_yaw_dump"): the magnetorquer serves two objectives.
+#  - dead_axis: the axis the wheels cannot actuate. Attitude there is the double
+#    integral of the dead-axis torque with no restoring term, so it gets a fast PD
+#    loop (yaw_wn well above orbit rate, well below 1/t_sample).
+#  - the other two axes: the slow isotropic momentum dump at dump_gain.
+dead_axis = 2 # body axis with no wheel authority (0=x, 1=y, 2=z)
+yaw_wn = 0.04 # rad/s, dead-axis PD natural frequency (~9x orbit rate here)
+yaw_zeta = 0.707 # dead-axis PD damping ratio
+yaw_wn_maneuver = 0.015 # rad/s, detuned dead-axis gain while the wheels run a
+# planned yaw maneuver. The wheels steer yaw by pumping (H_B)_dead through
+# -(w x H_B)_dead, which is exactly what the rate feedback damps, so the high gain
+# opposes the maneuver's only actuation path. Drop it during the maneuver, resume
+# yaw_wn for the cleanup afterwards.
 t_sample = 1
 enable = true
-mode = "momentum_dump_xyz"
+# mode = "momentum_dump_z_axis_only"
+# mode = "momentum_dump_xyz"
+mode = "split_yaw_dump"
 
 # When enabled, the mode output is a desired torque; commanded moment is
 # m = (B × T_des)/|B|², scaled down to |m| <= mag_moment_max, and applied torque is τ = m × B.
 [magt.physical]
-enable = false
+enable = true
 
 
 [faults]
-master_enable = false
+master_enable = true
 
 [fault.0]
 # mul_fault = [ 1.0, 1.0, 1.0, 0.0,]
 # add_fault = [ 0.0, 0.0, 0.0, 0.0,]
-mul_fault = [ 0.65, 0.65, 0.0,]
+mul_fault = [ 0.8, 0.8, 0.0,]
 # mul_fault = [ 1.0, 1.0, 0.0,]
 add_fault = [ 0, 0, 0,]
 time = 0
@@ -121,19 +149,19 @@ time = 100
 master_enable = false
 
 [satellite]
-mode="nominal_day" # nominal_night, nominal_day, ref_pointing, tracking
+mode="tracking" # nominal_night, nominal_day, ref_pointing, tracking
 euler_init_en = true
 euler_init = [ 0, 0, 0,]
 q_init = [ 0, 0, 0, 1,]
-use_ref_euler = true
+use_ref_euler = false
 ref_euler = [ 5, 0, 0,]
 use_ref_q = false
 ref_q = [ 0.0087265, 0.0, 0.0, 0.9999619,]
-use_ref_series = false
-# ref_q_series = [ [ 0.0, 0.0, 0.0, 1.0,], [ 0.4056, 0.4056, 0.0, 0.8192,], [ 0.4056, 0.4056, 0.0, 0.8192,], [ 0.0, 0.0, 0.0, 1.0,], [ 0.0, 0.0, 0.0, 1.0,], [ 0.4056, -0.4056, 0.0, 0.8192,], [ 0.4056, -0.4056, 0.0, 0.8192,], [ 0.0, 0.0, 0.0, 1.0,],]
-# ref_t_series = [ 0, 80, 100, 180, 200, 280, 300, 380,]
-ref_q_series = [ [ 0.0, 0.0, 0.0, 1.0,], [ 0.0087265, 0.0, 0.0, 0.9999619,]]
-ref_t_series = [ 0, 1,]
+use_ref_series = true
+ref_q_series = [ [ 0.0, 0.0, 0.0, 1.0,], [ 0.4056, 0.4056, 0.0, 0.8192,], [ 0.4056, 0.4056, 0.0, 0.8192,], [ 0.0, 0.0, 0.0, 1.0,], [ 0.0, 0.0, 0.0, 1.0,], [ 0.4056, -0.4056, 0.0, 0.8192,], [ 0.4056, -0.4056, 0.0, 0.8192,], [ 0.0, 0.0, 0.0, 1.0,],]
+ref_t_series = [ 0, 100, 120, 200, 220, 300, 320, 400,]
+# ref_q_series = [ [ 0.0, 0.0, 0.0, 1.0,], [ 0.3826834323650898, 0.0, 0.0, 0.9238795325112867,]]
+# ref_t_series = [ 0, 60,]
 sinusoidal_ref_amplitude_deg = [ 45, 45, 0,]
 sinusoidal_ref_frequency = [ 0.05, 0.05, 0.0,]
 
@@ -141,13 +169,15 @@ w_init_dps = [0, 0, 0,]
 wheels_control_enable = true
 mass = 150
 M_Inertia = [ [ 10.0, 1.2, 0.5,], [ 1.2, 19.0, 1.5,], [ 0.5, 1.5, 25.0,],]
+# M_Inertia = [ [ 50.0, 1.2, 0.5,], [ 1.2, 50.0, 1.5,], [ 0.5, 1.5, 50.0,],]
+# M_Inertia = [ [ 2.5, 0.0, 0.0,], [ 0.0, 3.5, 0.0,], [ 0.0, 0.0, 4.5,], ]
 
 # Preserves the previously hard-coded plant uncertainty Delta J = [2, 2.8, 3.6] kg.m2
 # = 0.8 * diag(J) (now config-driven; defaults to 0 when absent).
 delta_inertia_frac = 0.0
 delta_inertia_freq = [ 0.1, 0.2, 0.3 ]
 
-nominal_night_yaw_maneuver_enable = false
+nominal_night_yaw_maneuver_enable = true
 nominal_night_yaw_max_tilt_deg = 20
 nominal_night_yaw_leg_duration = 20
 nominal_night_interp_threshold_deg = 1
@@ -155,10 +185,9 @@ nominal_night_interp_threshold_deg = 1
 [orbit]
 altitude_km = 500 # km
 t_sample = 0.1
-mean_anomaly_deg = 185
 
 [disturbances]
-enable = true
+enable = false
 # model = "Nadafi"
 model = "realistic"
 rho_s = 0.6 # specular reflectivity for SRP torque (aluminised Mylar)

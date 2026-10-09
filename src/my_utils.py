@@ -688,6 +688,7 @@ def build_results_plots(config):
         wheel_axes = [str(i) for i in range(num_wheels)]
         detail.append(('T_wheels', wheel_axes, r'Wheel torque $\mathbf{T}_w$ ($\mathrm{N \cdot m}$)'))
         detail.append(('w_wheels', wheel_axes, r'Wheel speed $\boldsymbol{\omega}_w$ (rad/s)'))
+        detail.append(('H_wheels', wheel_axes, r'Wheel angular momentum $\mathbf{h}_w$ ($\mathrm{N \cdot m \cdot s}$)'))
         detail.append(('E', wheel_axes, r'Actuator authority $\mathbf{E}$ (fraction)'))
         detail.append(('f_wheels', wheel_axes, r'Wheel disturbance torque $\mathbf{f}_w$ ($\mathrm{N \cdot m}$)'))
         detail.append(('u_a', wheel_axes, r'Additive fault $\mathbf{u}_a$ ($\mathrm{N \cdot m}$)'))
@@ -710,8 +711,8 @@ def build_results_plots(config):
     detail.append(('T_magt', xyz_axes, r'Magnetorquer torque $\mathbf{T}_m$ ($\mathrm{N \cdot m}$)'))
     detail.append(('m_magt', xyz_axes, r'Magnetorquer moment $\mathbf{m}$ ($\mathrm{A \cdot m^2}$)'))
     detail.append(('B_eci', xyz_axes, r'Magnetic field ECI $\mathbf{B}$ (T)'))
-    detail.append(('H_total', xyz_axes, r'Total angular momentum $\mathbf{H}$ ($\mathrm{N \cdot m \cdot s}$)'))
-    detail.append(('H_norm', ['none'], r'Total angular momentum norm $\|\mathbf{H}\|$ ($\mathrm{N \cdot m \cdot s}$)'))
+    detail.append(('H_total', xyz_axes, r'Total angular momentum $\mathbf{h}$ ($\mathrm{N \cdot m \cdot s}$)'))
+    detail.append(('H_norm', ['none'], r'Total angular momentum norm $\|\mathbf{h}\|$ ($\mathrm{N \cdot m \cdot s}$)'))
 
     detail.append(('s_sat_eci', xyz_axes, r'Satellite position ECI $\mathbf{s}$ (km)'))
     detail.append(('v_sat_eci', xyz_axes, r'Satellite velocity ECI $\mathbf{v}$ (km/s)'))
@@ -773,8 +774,10 @@ def calc_lumped_disturbance(results_data, config):
     d = results_data[['T_dist_' + axis for axis in xyz_axes]].to_numpy() \
         - f_wheels_body
     results_data[['d_' + axis for axis in xyz_axes]] = d @ np.linalg.inv(inertia).T
-    results_data[['chi_1_error_' + axis for axis in xyz_axes]] = results_data[['chi_1_' + axis for axis in xyz_axes]].to_numpy() \
-    - results_data[['d_' + axis for axis in xyz_axes]].to_numpy()
+    # chi_1 only exists for the FNDO observer controllers (e.g. not pid)
+    if all('chi_1_' + axis in results_data for axis in xyz_axes):
+        results_data[['chi_1_error_' + axis for axis in xyz_axes]] = results_data[['chi_1_' + axis for axis in xyz_axes]].to_numpy() \
+        - results_data[['d_' + axis for axis in xyz_axes]].to_numpy()
     return results_data
 
 #! @brief Create every standard plot for a run: the summary sheet, the per-signal
