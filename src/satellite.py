@@ -169,6 +169,17 @@ class Satellite():
         self.night_yaw_max_attempts = config['satellite'].get('nominal_night_yaw_max_attempts', 4)
         self.night_yaw_min_improve = config['satellite'].get('nominal_night_yaw_min_improve', 0.7)
 
+        # nominal_day: body axis pointed at the sun (default +x, the EOSSAT solar panels'
+        # mean normal); body z is kept as near nadir as the sun constraint allows.
+        self.day_sun_axis = np.array(config['satellite'].get('nominal_day_sun_axis', [1.0, 0.0, 0.0]), dtype=float)
+        self.day_sun_axis /= np.linalg.norm(self.day_sun_axis)
+        # body counterpart of the inertial triad's second axis (sun x nadir), with z -> nadir
+        z_B = np.array([0.0, 0.0, 1.0])
+        b2 = my_utils.cross_product_M31M31(self.day_sun_axis, z_B)
+        if np.linalg.norm(b2) < 1e-6:
+            raise ValueError("nominal_day_sun_axis must not be parallel to body z (z is held toward nadir)")
+        self._day_secondary_axis = b2 / np.linalg.norm(b2)
+
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
 
         self.next_t_ref_update_interval = config['controller']['t_sample']
@@ -259,8 +270,7 @@ class Satellite():
     _night_interp_active = False
     _night_interp_t0 = 0.0
     _night_interp_t1 = 0.0
-    _night_interp_rot0 = None
-    _night_interp_rot1 = None
+    _night_interp_offset0 = None
 
     # nominal_night yaw box-maneuver state (see update_ref_q)
     _night_box_active = False
@@ -269,8 +279,10 @@ class Satellite():
     _night_box_next_allowed_t = 0.0
     _night_box_attempts = 0
     _night_box_prev_err = None
+    # last well-defined nominal_day target (see _nominal_target_rot_at)
+    _day_last_rot = None
     def update_ref_q(self, t):
-        if t >= self.next_t_ref_update:
+        if t >= self.next_t_ref_update - my_utils.T_EPS:
             self.next_t_ref_update = t + self.next_t_ref_update_interval
         else:
             return
@@ -278,41 +290,24 @@ class Satellite():
 
         if self.init and self.mode not in ("ref_pointing", "tracking"):
             if self.mode == "nominal_night" or self.mode == "nominal_day":
-                self.q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
+                self.q_RI = my_utils.conv_Rotation_obj_to_numpy_q(self._nominal_target_rot_at(t))
             self.w_RI_R = np.zeros(3)
             self.last_q_RI_update_t = t
             self.init = False
             return
-        if self.mode == "nominal_day":
-            # nP = np.array([1,0,0]) # body frame x axis
-            # qBI_I = self.q_BI
-            # theta_BS = np.arccos(nP @ self.orbit.nSI_I)
-            # nRS = np.cross(nSI_I, nP)
-            #  = self.orbit.nSI_I*np.sin()
-            # qBI = self.q_BI
-
-            # Reference (R) frame axes expressed in inertial (I): x=sun, z=nadir, y=z x x.
-            # Rows of a passive DCM T_RI are the R-axes in I coords (v_R = T_RI v_I).
-            # x_axis = self.orbit.nSB_I
-            # z_axis = self.orbit.nIB_I
-            # y_axis = my_utils.cross_product_M31M31(self.orbit.nIB_I, x_axis)
-            # T_RI = np.row_stack([x_axis, y_axis, z_axis])
-
-            q_NB = my_utils.quat_from_vectors(np.array([0, 0, 1]), my_utils.rotate_vector_by_quaternion(self.orbit.nIB_I, self.q_BI))
-
-            # self.q_RI = my_utils.dcm_to_quat(T_RI)
-            dq = 2 * self.q_RI * q_RI_prev.inverse() / self.next_t_ref_update_interval
-            self.w_RI_R = np.array([dq.x, dq.y, dq.z])
-            w_RI_R_prev = self.w_RI_R
-            self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
-        if self.mode == "nominal_night":
-            # Nadir/LVLH pointing: reference frame R == orbit frame O, so T_RI = T_OI.
-            # orbit.T_OI can step discretely between ref updates (e.g. LVLH frame
-            # singularities); feeding that step straight to the controller spikes the
-            # FNDO observer, so jumps bigger than night_interp_threshold_deg are smoothed
-            # with the same smootherstep SLERP "tracking" mode uses between waypoints,
-            # instead of being applied instantly.
-            new_q_RI = my_utils.dcm_to_quat(self.orbit.T_OI)
+        if self.mode == "nominal_night" or self.mode == "nominal_day":
+            # Both nominal modes are nadir pointing and differ only in the yaw target
+            # (see _nominal_target_rot_at), so they share the same reference shaping.
+            # The target can step discretely between ref updates (e.g. LVLH frame
+            # singularities, or the day-mode yaw flip as the sun crosses nadir); feeding
+            # that step straight to the controller spikes the FNDO observer, so jumps
+            # bigger than night_interp_threshold_deg are smoothed with the same
+            # smootherstep SLERP "tracking" mode uses between waypoints, and yaw (the
+            # unactuated axis) is driven with the box maneuver.
+            # The target is a function of time (it turns at ~orbit rate), so the
+            # reference rate/accel feedforward comes from central differences of it.
+            target_at = self._nominal_target_rot_at
+            new_q_RI = my_utils.conv_Rotation_obj_to_numpy_q(target_at(t))
             # dcm_to_quat picks the sign of q arbitrarily (scipy), while the interp/box
             # branches build q_RI from q_BI - keep the same hemisphere as the previous
             # reference so q_RI stays continuous instead of flipping to -q between branches.
@@ -337,17 +332,10 @@ class Satellite():
                             self._night_box_rots[i], self._night_box_rots[i + 1], dt)
                 elif self._night_interp_active:
                     if t >= self._night_interp_t1:
-                        w_RI_R_prev = self.w_RI_R
-                        dq = 2 * self.q_RI.inverse() * new_q_RI  / self.next_t_ref_update_interval
-                        self.q_RI = new_q_RI
-                        self.w_RI_R = np.array([dq.x, dq.y, dq.z]) # NB check this is reference frame coordinates
-                        self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
+                        self._update_ref_from_fn(target_at, t, dt)
                         self._night_interp_active = False
                     else:
-                        rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
-                        self._tracking_update_ref_project_smooth_interp(
-                            t, self._night_interp_t0, self._night_interp_t1,
-                            self._night_interp_rot0, rot1, dt)
+                        self._update_ref_from_fn(self._nominal_interp_rot_at, t, dt)
                 else:
                     # Yaw (z) component of the body->target error, as an angle (rad for a
                     # pure-z rotation; approximate otherwise) - this is specifically the
@@ -370,8 +358,8 @@ class Satellite():
                             give_up = "no longer converging ({:.2f} -> {:.2f} deg)".format(
                                 self._night_box_prev_err, err_deg_unactuated)
                         if give_up is not None:
-                            print("nominal_night: yaw error {:.2f} deg at t={:.2f}s - {}, holding "
-                                  "nadir track with yaw uncorrected".format(err_deg_unactuated, t, give_up))
+                            print("{}: yaw error {:.2f} deg at t={:.2f}s - {}, holding "
+                                  "nadir track with yaw uncorrected".format(self.mode, err_deg_unactuated, t, give_up))
                             self.night_yaw_maneuver_enable = False
                             start_box = False
 
@@ -384,32 +372,28 @@ class Satellite():
                         self._night_box_active = True
                         self._night_box_attempts += 1
                         self._night_box_prev_err = err_deg_unactuated
-                        print("nominal_night: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
+                        print("{}: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
                               "box maneuver (tilt={:.1f} deg) over {:.1f}s [pass {:d}/{:d}]".format(
-                                  err_deg_unactuated, t, n_legs, info['tilt_deg'],
+                                  self.mode, err_deg_unactuated, t, n_legs, info['tilt_deg'],
                                   self.night_yaw_leg_duration * n_legs,
                                   self._night_box_attempts, self.night_yaw_max_attempts))
                         self._tracking_update_ref_project_smooth_interp(
                             t, self._night_box_times[0], self._night_box_times[1],
                             self._night_box_rots[0], self._night_box_rots[1], dt)
                     elif abs(err_deg_total) > self.night_interp_threshold_deg:
-                        print("nominal_night: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(err_deg_total, t, self.night_interp_duration))
+                        print("{}: reference jump of {:.2f} deg at t={:.2f}s, smoothing over {:.2f}s".format(self.mode, err_deg_total, t, self.night_interp_duration))
                         self._night_interp_active = True
                         self._night_interp_t0 = t
                         self._night_interp_t1 = t + self.night_interp_duration
-                        self._night_interp_rot0 = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
-                        self._night_interp_rot1 = my_utils.conv_numpy_to_Rotation_obj_q(new_q_RI)
-                        self._tracking_update_ref_project_smooth_interp(
-                            t, self._night_interp_t0, self._night_interp_t1,
-                            self._night_interp_rot0, self._night_interp_rot1, dt)
+                        # Blend out the body's offset from the *moving* target rather
+                        # than SLERP from a fixed inertial attitude, which would leave the
+                        # reference lagging the target by the orbit rotation in the meantime.
+                        self._night_interp_offset0 = target_at(t).inv() * my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
+                        self._update_ref_from_fn(self._nominal_interp_rot_at, t, dt)
                     else:
-                        self.q_RI = new_q_RI
+                        self._update_ref_from_fn(target_at, t, dt)
             else:
-                w_RI_R_prev = self.w_RI_R
-                dq = 2 * self.q_RI.inverse() * new_q_RI / self.next_t_ref_update_interval
-                self.q_RI = new_q_RI
-                self.w_RI_R = np.array([dq.x, dq.y, dq.z])
-                self.dw_RI_R = (self.w_RI_R - w_RI_R_prev) / self.next_t_ref_update_interval
+                self._update_ref_from_fn(target_at, t, dt)
 
 
         if self.mode == "ref_pointing":
@@ -485,6 +469,53 @@ class Satellite():
                 rot1 = rots[i]
                 rot2 = rots[i + 1]
                 self._tracking_update_ref_project_smooth_interp(t, t_series_last, t_series_next, rot1, rot2, dt)
+
+    def _nominal_target_rot_at(self, tau):
+        """Target R frame for the nominal modes at time tau, as a Rotation.
+        nominal_night: plain LVLH, R == O so T_RI = T_OI.
+        nominal_day: sun pointing - body day_sun_axis exactly at the sun, with the
+        free rotation about the sun line set so body z is as close to nadir as it can
+        get (TRIAD, sun primary, nadir secondary). When the sun is (anti-)parallel to
+        nadir that rotation is undefined, so hold the last valid day target there
+        (LVLH if none yet). Uses the current sun vector: it moves ~1 deg/day,
+        negligible over a ref update."""
+        T_OI, r_I, _ = self.orbit.calc_T_OI_at(tau)
+        if self.mode == "nominal_day":
+            s_I = self.orbit.nSB_I
+            n_I = -r_I / np.linalg.norm(r_I)
+            r2 = my_utils.cross_product_M31M31(s_I, n_I)
+            n = np.linalg.norm(r2)
+            if n > 1e-3:
+                r2 = r2 / n
+                r3 = my_utils.cross_product_M31M31(s_I, r2)
+                # same triad built from the body axes; T_RI maps the inertial triad onto it
+                b1 = self.day_sun_axis
+                b2 = self._day_secondary_axis
+                b3 = my_utils.cross_product_M31M31(b1, b2)
+                T_RI = np.column_stack([b1, b2, b3]) @ np.row_stack([s_I, r2, r3])
+                self._day_last_rot = my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_RI))
+            if self._day_last_rot is not None:
+                return self._day_last_rot
+        return my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_OI))
+
+    def _nominal_interp_rot_at(self, tau):
+        """Moving target composed with the start offset, smootherstepped to identity."""
+        s = np.clip((tau - self._night_interp_t0) / (self._night_interp_t1 - self._night_interp_t0), 0.0, 1.0)
+        s = s*s*s*(s*(s*6 - 15) + 10)
+        return self._nominal_target_rot_at(tau) * Rotation.from_rotvec((1.0 - s) * self._night_interp_offset0.as_rotvec())
+
+    def _update_ref_from_fn(self, rot_at, t, dt = 1e-3):
+        """Set q_RI from rot_at(t), and w_RI_R / dw_RI_R (R frame) by central differences."""
+        R0 = rot_at(t)
+        R_fwd = (R0.inv() * rot_at(t + dt)).as_rotvec() / dt
+        R_bwd = (rot_at(t - dt).inv() * R0).as_rotvec() / dt
+        q_RI = my_utils.conv_Rotation_obj_to_numpy_q(R0)
+        # keep q_RI in the previous hemisphere (q and -q are the same attitude)
+        if (q_RI.w*self.q_RI.w + q_RI.x*self.q_RI.x + q_RI.y*self.q_RI.y + q_RI.z*self.q_RI.z) < 0:
+            q_RI = -q_RI
+        self.q_RI = q_RI
+        self.w_RI_R = 0.5 * (R_fwd + R_bwd)
+        self.dw_RI_R = (R_fwd - R_bwd) / dt
 
     def _tracking_find_time_index(self, tau, times):
         i = int(np.searchsorted(times, tau) - 1)
