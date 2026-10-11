@@ -175,8 +175,12 @@ separate_plots_display = false
 show_plots = false
 
 [output.visualizer]
-enable = false
-file_path = "/opt/satellite-visualizer/dist/telemetry.json"
+enable = true
+write_to_file = false
+file_path = "telemetry.json"
+publish = true
+host = "localhost"
+port = 3000
 t_sample = 1.0
 
 [satellite.dimensions]

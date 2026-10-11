@@ -450,14 +450,17 @@ def main():
                     simulation.log_data_to_file(LOG_FILE_NAME, LOG_FOLDER_PATH)
 
                 if config['output']['visualizer']['enable'] is True:
+                    host = config['output']['visualizer'].get('host', 'localhost')
+                    port = config['output']['visualizer'].get('port', 'localhost')
                     visualizer_dict = viz.parse_results(simulation.results_df, config['output']['visualizer']['t_sample'])
                     if config['output']['visualizer']['write_to_file'] is True:
                         with open(config['output']['visualizer']['file_path'], "w") as f:
                             json.dump(visualizer_dict, f, indent=2)
                     if config['output']['visualizer']['publish'] is True:
-                        url = "http://localhost:3000/api/telemetry/update"
+                        url = f"http://{host}:{port}/api/telemetry/update"
                         response = requests.post(url, json=visualizer_dict)
                         print(f"Visualizer publish: {response.status_code}")
+                        print(f"link: http://{host}:{port}/satellite-visualizer/telemetry-viewer.html?scenario={json.loads(response.text)['scenarioId']}")
                         if not response.ok:
                             print(response.text)
                     else:
