@@ -12,7 +12,7 @@ input_type="ref" # ref, ref_square, torque, sine, square
 log_enable = true
 verbose = true
 integrator = "sampled"      # rk45 (legacy: discrete blocks run inside the RHS) | sampled (fixed-step RK4, discrete blocks once per tick)
-integrator_substeps = 1  # sampled only: RK4 steps per base tick
+integrator_substeps = 5  # sampled only: RK4 steps per base tick
 
 [tuning]
 iterations = 30
@@ -29,7 +29,7 @@ ki = 0
 T_max = 1000
 T_min = 0
 filter_coef = 0
-t_sample = 0.01
+t_sample = 0.1
 type = "pid" # pid, backstepping, adaptive
 sub_type = "" # Nadafi_FNDO, Nadafi_MFNDO, Shen, Kararouti
 adaptive_gain = 0.1
@@ -62,7 +62,7 @@ Gamma_mu22 = 0.05
 [observer]
 enable = false
 feedback_en = false
-t_sample = 0.1
+t_sample = 0.01
 gain = [ 3.00, 0.005, 0.000 ]
 
 [wheels]
