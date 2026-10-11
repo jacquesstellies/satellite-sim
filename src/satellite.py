@@ -102,6 +102,7 @@ class Satellite():
 
         self.E = np.eye(self.wheel_module.num_wheels)
         self.f_wheels = np.zeros(self.wheel_module.num_wheels)
+        self.f_wheels_fault = np.zeros(self.wheel_module.num_wheels)
 
         detection_config = config.get('detection', None)
         if detection_config is not None and detection_config.get('enable', False):
@@ -566,6 +567,7 @@ class Satellite():
     E = None
     f = None
     f_wheels = None
+    f_wheels_fault = None
     def calc_state_rates(self, t, y):
 
         w_wheels_input = self._set_state(y)
@@ -593,12 +595,13 @@ class Satellite():
         self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI)
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
-        # Ground-truth per-wheel fault torque, logged as f_wheels. Same sign convention as
-        # the ESO's f_wheels_est (dw_est = (u + f)/J): f = delivered - commanded
-        # = (E - I) u + u_a. Independent of the observer, so it must stay outside the
-        # observer_module.enable branch or it logs zeros whenever the observer is off.
-        self.f_wheels = (self.fault_module.E - np.eye(self.wheel_module.num_wheels)) @ self.T_ctr_wheels \
-            + self.fault_module.u_a
+        # Ground-truth per-wheel torque deviation, logged as f_wheels. Same sign convention
+        # as the ESO's f_wheels_est (dw_est = (u + f)/J): f = delivered - commanded, where
+        # delivered = J*dw is the net wheel torque after the fault, torque clip, speed-limit
+        # clamp and friction. f_wheels_fault keeps only the fault's share of it.
+
+        self.f_wheels = self.wheel_module.dH_wheels - self.T_ctr_wheels
+        self.f_wheels_fault = self._calc_fault_torque()
 
         if self.observer_module.enable is True:
             # @NB FIX THIS
@@ -614,6 +617,16 @@ class Satellite():
         self.logger.store_data(t)
 
         return np.hstack([body_rates, self.wheel_module.dw_wheels])
+
+    def _calc_fault_torque(self):
+        """Fault-only wheel torque: clip(E u + u_a) - clip(u), both clipped to the wheel
+        torque limit. Friction and the speed-limit clamp act on healthy and faulted wheels
+        alike, so they are left out. Without the clip, (E - I) u + u_a scales with the
+        unsaturated command and reports N*m-level faults whenever the controller winds up."""
+        T_max = np.array([wheel.T_max for wheel in self.wheel_module.wheels])
+        u = self.T_ctr_wheels
+        u_faulted = self.fault_module.E @ u + self.fault_module.u_a
+        return np.clip(u_faulted, -T_max, T_max) - np.clip(u, -T_max, T_max)
 
     def _set_state(self, y):
         self.w_BI_B = np.array(y[:3])
@@ -682,8 +695,8 @@ class Satellite():
         # derived quantities consistent with the new held inputs (logging, observers)
         self.plant_rates(t, y)
 
-        self.f_wheels = (self.fault_module.E - np.eye(self.wheel_module.num_wheels)) @ self.T_ctr_wheels \
-            + self.fault_module.u_a
+        self.f_wheels = self.wheel_module.dH_wheels - self.T_ctr_wheels
+        self.f_wheels_fault = self._calc_fault_torque()
 
         if self.observer_module.enable is True:
             self.E_est = self.observer_module.calc_state_estimates(t, w_wheels_input, self.T_ctr_wheels)

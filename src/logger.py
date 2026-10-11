@@ -52,6 +52,7 @@ class Logger:
             self.results_data[f'T_wheels_{i}'] = []
             self.results_data[f'E_{i}'] = []
             self.results_data[f'f_wheels_{i}'] = []
+            self.results_data[f'f_wheels_fault_{i}'] = []
             self.results_data[f'u_a_{i}'] = []
 
             self.results_data[f'w_wheels_est_{i}'] = []
@@ -153,6 +154,7 @@ class Logger:
                     # self.results_data['E_est_' + str(i)].append(self.observer_module.E_mul[i][i])
                     self.results_data['E_est_' + str(i)].append(self.satellite.E[i][i])
                     self.results_data['f_wheels_' + str(i)].append(self.satellite.f_wheels[i])
+                    self.results_data['f_wheels_fault_' + str(i)].append(self.satellite.f_wheels_fault[i])
                     self.results_data['u_a_' + str(i)].append(self.satellite.fault_module.u_a[i])
                 
                 # branch on the *runtime* controller type/sub_type (FDIR can switch
