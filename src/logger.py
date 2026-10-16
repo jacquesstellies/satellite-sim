@@ -45,6 +45,22 @@ class Logger:
         for i in my_utils.q_axes:
             self.results_data[f'q_sat_ref_{i}'] = []
 
+        # solar panel sun incidence (only for models that define panels, e.g. EOSSAT)
+        self.panel_keys_en = len(self.satellite.solar_panels) > 0
+        self.results_data['eclipse'] = []
+        if self.panel_keys_en:
+            for i in range(len(self.satellite.solar_panels)):
+                self.results_data[f'cos_panel_{i}'] = []
+            self.results_data['cos_factor'] = []
+
+        # raw nominal-mode targets: nadir (LVLH) while in nominal_night, sun pointing
+        # while in nominal_day, NaN otherwise - only when starting in a nominal mode
+        self.nominal_keys_en = self.config['satellite']['mode'] in ('nominal_night', 'nominal_day')
+        if self.nominal_keys_en:
+            for i in my_utils.q_axes:
+                self.results_data[f'q_nadir_ref_{i}'] = []
+                self.results_data[f'q_sun_ref_{i}'] = []
+
         for i in range(self.satellite.wheel_module.num_wheels):
             self.results_data[f'T_ctr_wheels_{i}'] = []
 
@@ -115,7 +131,9 @@ class Logger:
                 self.results_data[f'chi_1_det_{axis}'] = []
             self.results_data['det_latched_wheel'] = []
 
-        self.next_timestamp = self.satellite.controller.t_sample
+        # logging period; output.log_t_sample decimates long runs (defaults to every controller tick)
+        self.log_t_sample = self.config['output'].get('log_t_sample', self.satellite.controller.t_sample)
+        self.next_timestamp = self.log_t_sample
 
     def store_data(self, t):
         if self.enable and self.initialized:
@@ -139,9 +157,29 @@ class Logger:
                     self.results_data['w_sat_ref_' + axis].append(self.satellite.w_RI_R[i])
                     self.results_data['dw_sat_ref_' + axis].append(self.satellite.dw_RI_R[i])
                 
+                self.results_data['eclipse'].append(float(self.satellite.orbit.eclipse))
+                if self.panel_keys_en:
+                    cos_panels = self.satellite.calc_panel_cos(my_utils.quat_to_dcm(self.satellite.q_BI))
+                    areas = np.array([face.area for face in self.satellite.solar_panels])
+                    for i, c in enumerate(cos_panels):
+                        self.results_data[f'cos_panel_{i}'].append(c)
+                    # area-weighted mean: fraction of the total panel area's full-sun output
+                    self.results_data['cos_factor'].append(areas @ cos_panels / np.sum(areas))
+
                 q_ref = [self.satellite.q_RI.x, self.satellite.q_RI.y, self.satellite.q_RI.z, self.satellite.q_RI.w]
                 for i, axis in enumerate(my_utils.q_axes):
                     self.results_data['q_sat_ref_' + axis].append(q_ref[i])
+
+                if self.nominal_keys_en:
+                    q_t = self.satellite.q_target_RI
+                    q_BI = self.satellite.q_BI
+                    if q_t is not None and (q_t.w*q_BI.w + q_t.x*q_BI.x + q_t.y*q_BI.y + q_t.z*q_BI.z) < 0:
+                        q_t = -q_t  # same hemisphere as q_sat so the curves overlay instead of mirroring
+                    for key, mode in (('q_nadir_ref', 'nominal_night'), ('q_sun_ref', 'nominal_day')):
+                        active = q_t is not None and self.satellite.mode == mode
+                        q_vals = [q_t.x, q_t.y, q_t.z, q_t.w] if active else [np.nan]*4
+                        for i, axis in enumerate(my_utils.q_axes):
+                            self.results_data[f'{key}_{axis}'].append(q_vals[i])
 
                 for i, wheel in enumerate(self.satellite.wheel_module.wheels):
                     self.results_data['w_wheels_' + str(i)].append(self.satellite.wheel_module.w_wheels[i])
@@ -234,7 +272,7 @@ class Logger:
                 # self.results_data['control_adaptive_model_output'] = self.satellite.controller.control_adaptive_model_output
                 # for i, axis in enumerate(my_utils.xyz_axes):
                 #     self.results_data[f'control_theta_{axis}'].append(self.satellite.controller.theta[i])
-                self.next_timestamp += self.satellite.controller.t_sample
+                self.next_timestamp += self.log_t_sample
 
     log_results_file_path = ""
     def log(self, message, to_results_file=False, to_console=True):

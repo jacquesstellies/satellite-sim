@@ -75,9 +75,19 @@ class Orbit():
             self.altitude = altitude
         else:
             raise(Exception("invalid altitude given: altitude must be greater than 100km"))
+
+        
+        self.arg_perigee = self.config['orbit'].get('arg_perigee_deg', 0.0) * my_utils.DEG_TO_RAD
+        self.mean_anomaly = self.config['orbit'].get('mean_anomaly_deg', 0.0) * my_utils.DEG_TO_RAD
+
+        self.ltdn = self.config['orbit'].get('ltdn', 09.5)
+
+        tut1 = (self.jd + self.fr - my_utils.J2000) / my_utils.CENT2DAY
+        mean_lon, _, _ = self.sun_ecliptic_parameters(tut1)
+        self.RAAN = (mean_lon + self.ltdn * np.pi / 12) % my_utils.TWOPI
+
         # place into circular sun synchronous orbit
         RAAN_rate = 2*np.pi/(365.26*24*3600)
-        self.RAAN = 15 * my_utils.DEG_TO_RAD
         earth_radius = 6378 # km
         
         J = 1.08263e-3 # Oblateness factor
@@ -92,11 +102,6 @@ class Orbit():
                                     np.sqrt(MU)*J*np.power(earth_radius,2)))
         
         self.period = 2*np.pi*self.radius/np.sqrt(MU/self.radius)
-
-        self.arg_perigee = 0
-
-        if 'mean_anomaly_deg' in self.config['orbit']:
-            self.mean_anomaly = self.config['orbit']['mean_anomaly_deg'] * np.pi / 180
 
         self.propagator = Satrec()
 
@@ -149,6 +154,50 @@ class Orbit():
         x = my_utils.cross_product_M31M31(y, z)
         # Rows of the passive DCM T_OI are the O-frame axes in I coords (v_O = T_OI v_I).
         return np.row_stack([x, y, z]), r, v
+
+    def calc_sun_vector_at(self, t_runtime, r_I=None):
+        """Sun unit vector seen from the satellite at an arbitrary run time.
+
+        Returns (nSB_I, rSI_I, r_I). Pass r_I if the caller already propagated the orbit
+        at this time, to avoid a second SGP4 call.
+        """
+        if r_I is None:
+            _, r_I, _ = self.calc_T_OI_at(t_runtime)
+        rSI_I, _, _ = self.get_sun_position(self.jd + t_runtime/86400)
+        rSB_I = rSI_I - r_I
+        return rSB_I/np.linalg.norm(rSB_I), rSI_I, r_I
+
+    def eclipse_at(self, t_runtime):
+        """Eclipse flag at an arbitrary run time, without touching orbit state."""
+        _, r_I, _ = self.calc_T_OI_at(t_runtime)
+        _, rSI_I, _ = self.calc_sun_vector_at(t_runtime, r_I=r_I)
+        return self.check_sun_eclipse(r_I, rSI_I)
+
+    def next_eclipse_entry_after(self, t_runtime, horizon=None, step=30.0):
+        """Run time of the next sunlit -> eclipse crossing after t_runtime, or None.
+
+        Coarse scan for the sign change then bisection. Used by the day-mode clocking
+        planner, which needs to know where nadir will be when the satellite is handed
+        back to nadir pointing.
+        """
+        if horizon is None:
+            horizon = 1.5*self.period
+        t_end = t_runtime + horizon
+        t, prev = t_runtime, self.eclipse_at(t_runtime)
+        while t < t_end:
+            t_next = min(t + step, t_end)
+            cur = self.eclipse_at(t_next)
+            if cur and not prev:
+                lo, hi = t, t_next
+                for _ in range(40):
+                    mid = 0.5*(lo + hi)
+                    if self.eclipse_at(mid):
+                        hi = mid
+                    else:
+                        lo = mid
+                return 0.5*(lo + hi)
+            prev, t = cur, t_next
+        return None
 
     next_t_sample: float = 0.0
     # orbital parameters update
@@ -452,7 +501,7 @@ class Disturbances():
         # body frame. nadir in inertial is nIB_I (= -r_hat); rotate it into body.
         u_e = T_BI @ self.orbit.nIB_I
 
-        T_grav = 3*MU/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
+        T_grav = 3*MU/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia_plant@u_e)
         return T_grav
 
     def calc_solar_radiation_pressure_torque(self, satellite, T_BI):

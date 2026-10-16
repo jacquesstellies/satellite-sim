@@ -13,13 +13,74 @@ from orbit import Disturbances, Orbit
 from observer import ObserverModule, FNDOFaultDetector
 from route_planner import yaw_maneuver_waypoints
 
+# Peak |s'| and |s''| of the quintic smootherstep s = 6t^5 - 15t^4 + 10t^3 used by
+# _tracking_q_ref_at, over t in [0,1]. s' = 30t^2(1-t)^2 peaks at 1.875 (t=0.5); s''
+# peaks at 5.7735 (t = (3 -+ sqrt(3))/6). Exact, not fitted: _tracking_q_ref_at composes
+# a fixed rotation with a one-parameter subgroup about a fixed axis, so the body-frame
+# rate/accel of the path are exactly s'(t)*rel and s''(t)*rel.
+SMOOTHERSTEP_PEAK_RATE = 1.875
+SMOOTHERSTEP_PEAK_ACCEL = 5.7735
+
+
 class DivergentRate(Exception):
     pass
+
+class DivergentAttitude(Exception):
+    pass
+
 class Face():
     r_com_to_cop = np.zeros(3)
     area = 0
     norm_vec = np.zeros(3)
+    solar_panel = False
     
+def face_geometry(model, dimensions):
+    """Surface faces (normal, area, centre of pressure) of the satellite model; the
+    solar panels are flagged with solar_panel = True."""
+    faces = []
+    if model == "rectangular":
+        dim_array = np.array([dimensions['x'], dimensions['y'], dimensions['z']])
+        for i in range(3):
+            for j in range(2):
+                face = Face()
+                face.norm_vec = np.zeros(3)
+                face.norm_vec[i] = 1*(1,-1) [j == 1]
+                face.area = 1
+                for k, axis in enumerate(face.norm_vec):
+                    if axis == 0:
+                        face.area *= dim_array[k]
+                face.r_com_to_cop = face.norm_vec*0.5*dim_array              
+                faces.append(face)
+                # print(face.norm_vec, face.area, face.r_com_to_cop)
+    elif model == "EOSSAT":
+        com_to_cop_array = [[0.0, 0.0, 0.995],
+                            [0.0, 0.0, 0.026],
+                            [0.198, 0.348, 0.514],
+                            [0.198, -0.348, 0.514],
+                            [-0.33, 0.0, 0.514],
+                            [-0.165, 0.459, 0.514],
+                            [-0.165, -0.459, 0.514]
+                            ]
+
+        norms_array = [[0, 0, 1], 
+                       [0, 0, -1],
+                       [0.869, 0.495, 0], # (Solar panel)
+                       [0.869, -0.495, 0], # (Solar panel)
+                       [-1, 0, 0],
+                       [-0.82, 0.572, 0],
+                       [-0.82, -0.572, 0]]
+        
+        areas = [0.579, 0.579, 0.763, 0.763, 0.415, 0.519, 0.519]
+        solar_panels = [2, 3]
+        for i in range(len(com_to_cop_array)):
+            face = Face()
+            face.r_com_to_cop = np.array(com_to_cop_array[i])
+            face.norm_vec = np.array(norms_array[i])
+            face.area = areas[i]
+            face.solar_panel = i in solar_panels
+            faces.append(face)
+    return faces
+
 class Satellite():
     M_inertia : np.ndarray = np.zeros((3,3))
     M_inertia_inv : np.ndarray = np.zeros((3,3))
@@ -84,6 +145,13 @@ class Satellite():
             raise Exception("inertia override must be 3x3 or 3x1 matrix")
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
 
+        # True plant inertia. M_inertia above is the controller/model value; set
+        # M_Inertia_plant to give the plant a static inertia error (defaults to M_inertia).
+        M_inertia_plant = np.array(config['satellite'].get('M_Inertia_plant', self.M_inertia), dtype=float)
+        if M_inertia_plant.shape == (3,):
+            M_inertia_plant = np.diag(M_inertia_plant)
+        self.M_inertia_plant = M_inertia_plant
+
         self.delta_inertia_frac = config['satellite'].get('delta_inertia_frac', 0.0)
         self.delta_inertia_freq = np.array(config['satellite'].get('delta_inertia_freq', [0.1, 0.2, 0.3]))
         self.disturbances = Disturbances(self.orbit, config)
@@ -97,7 +165,7 @@ class Satellite():
         
         self.w_BI_B = np.array(config['satellite']['w_init_dps']) * my_utils.DEG_TO_RAD
         assert len(self.w_BI_B) == 3, "w_init_dps must be a 3 element array"
-        self.H = self.M_inertia@self.w_BI_B
+        self.H = self.M_inertia_plant@self.w_BI_B
         self.H_total = self.H + self.wheel_module.H_vec
 
         self.E = np.eye(self.wheel_module.num_wheels)
@@ -169,6 +237,21 @@ class Satellite():
         self.night_yaw_cooldown = config['satellite'].get('nominal_night_yaw_cooldown', 60.0)
         self.night_yaw_max_attempts = config['satellite'].get('nominal_night_yaw_max_attempts', 4)
         self.night_yaw_min_improve = config['satellite'].get('nominal_night_yaw_min_improve', 0.7)
+        
+        # A box takes minutes, over which nadir rotates at orbital rate (~0.063 deg/s), so
+        # sizing the yaw against nadir *now* is stale by ~10 deg before the box even ends.
+        # Size it against the propagated nadir frame at maneuver end instead.
+        self.night_yaw_predict_enable = config['satellite'].get('nominal_night_yaw_predict_enable', True)
+        self.night_yaw_predict_iters = config['satellite'].get('nominal_night_yaw_predict_iters', 3)
+
+        # Each box leg is a rest-to-rest single-axis slew of `tilt`, so its peak wheel
+        # torque/momentum demand is set by the leg duration. Size that duration from the
+        # actual wheel limits rather than trusting a hand-set constant: momentum scales
+        # as 1/T and torque as 1/T^2, so a leg that is merely "slow-looking" can still be
+        # the thing that saturates a wheel and winds the FNDO integrator up.
+        self.night_yaw_actuator_limit_enable = config['satellite'].get('nominal_night_yaw_actuator_limit_enable', True)
+        self.night_yaw_actuator_margin = config['satellite'].get('nominal_night_yaw_actuator_margin', 0.5)
+        self.night_yaw_leg_duration_max = config['satellite'].get('nominal_night_yaw_leg_duration_max', 600.0)
 
         # nominal_day: body axis pointed at the sun (default +x, the EOSSAT solar panels'
         # mean normal); body z is kept as near nadir as the sun constraint allows.
@@ -181,55 +264,48 @@ class Satellite():
             raise ValueError("nominal_day_sun_axis must not be parallel to body z (z is held toward nadir)")
         self._day_secondary_axis = b2 / np.linalg.norm(b2)
 
+        # Sun pointing only pins 2 DOF - the rotation *about* the sun line is free, and the
+        # TRIAD above spends it on "keep z near nadir". Spend it instead on making the mode
+        # transitions cost nothing on the unactuated z axis: pick the clocking that zeroes
+        # the z error entering sun mode, then roll (about the sun axis, which is actuated)
+        # to the one that zeroes it on the way back to nadir. Turns a ~135 deg box maneuver
+        # into an ~80 s roll. See _day_latch_clocking.
+        self.day_clock_enable = config['satellite'].get('nominal_day_clock_enable', True)
+        # wait out the mode-transition slew before re-clocking, so the two don't overlap
+        self.day_reclock_delay = config['satellite'].get('nominal_day_reclock_delay',
+                                                         self.night_interp_duration)
+
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
+        # Pointing-error FD: principal angle of q_RB against the *commanded* reference.
+        # Reference jumps are smoothed from the current attitude, so this stays small
+        # through acquisition and mode switches (~2 deg peak) even when the raw target
+        # jumps 140+ deg; a sustained large error means the controller has lost the ref.
+        self.fd_q_max = config['FDIR']['satellite'].get('q_err_max_deg', 10.0) * my_utils.DEG_TO_RAD
+        self.fd_q_persist = config['FDIR']['satellite'].get('q_err_persist_s', 10.0)
+        self._fd_q_exceed_t0 = None
 
         self.next_t_ref_update_interval = config['controller']['t_sample']
 
         if self.mode == "sinusoidal":
             self.sinusoidal_ref_amplitude = np.array(config['satellite']['sinusoidal_ref_amplitude_deg']) * my_utils.DEG_TO_RAD
             self.sinusoidal_ref_frequency = np.array(config['satellite']['sinusoidal_ref_frequency'])
+
+        self.auto_switch = config['satellite'].get('auto_switch', True)
         
     def calc_face_properties(self):
-        model = self.config['satellite']['dimensions']['model']
-        if model == "rectangular":
-            dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
-            for i in range(3):
-                for j in range(2):
-                    face = Face()
-                    face.norm_vec = np.zeros(3)
-                    face.norm_vec[i] = 1*(1,-1) [j == 1]
-                    face.area = 1
-                    for k, axis in enumerate(face.norm_vec):
-                        if axis == 0:
-                            face.area *= dim_array[k]
-                    face.r_com_to_cop = face.norm_vec*0.5*dim_array              
-                    self.faces.append(face)
-                    # print(face.norm_vec, face.area, face.r_com_to_cop)
-        elif model == "EOSSAT":
-            com_to_cop_array = [[0.0, 0.0, 0.995],
-                                [0.0, 0.0, 0.026],
-                                [0.198, 0.348, 0.514],
-                                [0.198, -0.348, 0.514],
-                                [-0.33, 0.0, 0.514],
-                                [-0.165, 0.459, 0.514],
-                                [-0.165, -0.459, 0.514]
-                                ]
+        # per instance: the class-level list would keep accumulating faces (and so
+        # double the SRP/aero torques) for every Satellite built in the same process
+        self.faces = face_geometry(self.config['satellite']['dimensions']['model'], self.dimensions)
+        self.solar_panels = [face for face in self.faces if face.solar_panel]
 
-            norms_array = [[0, 0, 1], 
-                           [0, 0, -1],
-                           [0.869, 0.495, 0], # (Solar panel)
-                           [0.869, -0.495, 0], # (Solar panel)
-                           [-1, 0, 0],
-                           [-0.82, 0.572, 0],
-                           [-0.82, -0.572, 0]]
-            
-            areas = [0.579, 0.579, 0.763, 0.763, 0.415, 0.519, 0.519]
-            for i in range(len(com_to_cop_array)):
-                face = Face()
-                face.r_com_to_cop = np.array(com_to_cop_array[i])
-                face.norm_vec = np.array(norms_array[i])
-                face.area = areas[i]
-                self.faces.append(face)
+    def calc_panel_cos(self, T_BI):
+        """Sun incidence cosine per solar panel, clipped at 0 (sun behind the panel)
+        and zeroed in eclipse. nSB_I points satellite -> sun."""
+        if self.orbit.eclipse:
+            return np.zeros(len(self.solar_panels))
+        n_sun_B = T_BI @ self.orbit.nSB_I
+        return np.array([max(0.0, face.norm_vec @ n_sun_B / np.linalg.norm(face.norm_vec))
+                         for face in self.solar_panels])
 
     def calc_M_inertia_body(self):
 
@@ -244,20 +320,25 @@ class Satellite():
         self.M_inertia = self.calc_M_inertia_body()
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
 
-    def update_mode(self):
+    auto_switch = True
+    def update_mode(self, t):
         mode_prev = self.mode
         if self.init == True:
             if self.config['simulation']['verbose']:
                 print("MODE STARTUP \t ", self.mode)
         if self.mode == "ref_pointing":
             return
-        # if self.orbit.eclipse:
-        #     self.mode = "nominal_night"
-        # else:
-        #     self.mode = "nominal_day"
+        if self.auto_switch:
+            if self.mode == "nominal_day" and self.orbit.eclipse:
+                self.mode = "nominal_night"
+            if self.mode == "nominal_night" and not self.orbit.eclipse:
+                self.mode = "nominal_day"
 
         if self.mode != mode_prev:
-            print("MODE SWITCH \t ", mode_prev, " -> ", self.mode)
+            print("MODE SWITCH \t ", mode_prev, " -> ", self.mode, " at t = ", t, "s")
+            if self.mode == "nominal_day":
+                # sun mode's free DOF is chosen here, against the attitude we are leaving
+                self._day_latch_clocking(t)
 
     t_ref_update = 0
     q_RI_series_index = 0
@@ -282,12 +363,21 @@ class Satellite():
     _night_box_prev_err = None
     # last well-defined nominal_day target (see _nominal_target_rot_at)
     _day_last_rot = None
+
+    # nominal_day clocking schedule (see _day_latch_clocking)
+    _day_phi_out = 0.0
+    _day_phi_in = 0.0
+    _day_dphi = 0.0
+    _day_rc_t0 = 0.0
+    _day_rc_t1 = 0.0
+    # latest raw nominal-mode target q_RI (see update_ref_q), None until first computed
+    q_target_RI = None
     def update_ref_q(self, t):
         if t >= self.next_t_ref_update - my_utils.T_EPS:
             self.next_t_ref_update = t + self.next_t_ref_update_interval
         else:
             return
-        self.update_mode()
+        self.update_mode(t)
 
         if self.init and self.mode not in ("ref_pointing", "tracking"):
             if self.mode == "nominal_night" or self.mode == "nominal_day":
@@ -315,6 +405,8 @@ class Satellite():
             if (new_q_RI.w*self.q_RI.w + new_q_RI.x*self.q_RI.x
                     + new_q_RI.y*self.q_RI.y + new_q_RI.z*self.q_RI.z) < 0:
                 new_q_RI = -new_q_RI
+            # raw (unsmoothed) mode target, logged for the nadir/sun comparison plot
+            self.q_target_RI = new_q_RI
             dt = 1e-3
             if self._night_interp_enabled:
                 if self._night_box_active:
@@ -341,11 +433,18 @@ class Satellite():
                     # Yaw (z) component of the body->target error, as an angle (rad for a
                     # pure-z rotation; approximate otherwise) - this is specifically the
                     # unactuated-axis error, not the full 3-axis error.
-                    err_deg_unactuated = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
+                    # err_deg_unactuated = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
+                    err_deg_unactuated = self._night_yaw_err_deg(new_q_RI)
                     err_deg_total = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
 
+                    # In sun mode the free DOF about the sun line is already doing this
+                    # job, cheaply and on an actuated axis, so the box has nothing to add
+                    # there - and firing it on transition transients just throws the
+                    # attitude away for the length of a box.
+                    box_mode_ok = not (self.mode == "nominal_day" and self.day_clock_enable)
                     start_box = (abs(err_deg_unactuated) > self.night_interp_threshold_deg
                                  and self.night_yaw_maneuver_enable
+                                 and box_mode_ok
                                  and t >= self._night_box_next_allowed_t)
                     if start_box:
                         # Stop re-arming once passes stop paying for themselves, otherwise
@@ -365,18 +464,19 @@ class Satellite():
                             start_box = False
 
                     if start_box:
-                        q_series, info = yaw_maneuver_waypoints(err_deg_unactuated, max_tilt_deg=self.night_yaw_max_tilt_deg)
+                        yaw_deg, q_series, info, horizon, leg = self._night_plan_yaw_box(t)
                         rot_start = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
                         self._night_box_rots = [rot_start * Rotation.from_quat(q) for q in q_series]
                         n_legs = len(self._night_box_rots) - 1
-                        self._night_box_times = t + self.night_yaw_leg_duration * np.arange(len(self._night_box_rots))
+                        self._night_box_times = t + leg * np.arange(len(self._night_box_rots))
                         self._night_box_active = True
                         self._night_box_attempts += 1
                         self._night_box_prev_err = err_deg_unactuated
-                        print("{}: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
-                              "box maneuver (tilt={:.1f} deg) over {:.1f}s [pass {:d}/{:d}]".format(
-                                  self.mode, err_deg_unactuated, t, n_legs, info['tilt_deg'],
-                                  self.night_yaw_leg_duration * n_legs,
+                        print("{}: yaw error {:.2f} deg at t={:.2f}s, targeting {:.2f} deg at "
+                              "t+{:.0f}s, executing {:d}-leg box (tilt={:.1f} deg, leg={:.0f}s "
+                              "set by {}) over {:.1f}s [pass {:d}/{:d}]".format(
+                                  self.mode, err_deg_unactuated, t, yaw_deg, horizon, n_legs,
+                                  info['tilt_deg'], leg, info['leg_binding'], leg * n_legs,
                                   self._night_box_attempts, self.night_yaw_max_attempts))
                         self._tracking_update_ref_project_smooth_interp(
                             t, self._night_box_times[0], self._night_box_times[1],
@@ -471,6 +571,80 @@ class Satellite():
                 rot2 = rots[i + 1]
                 self._tracking_update_ref_project_smooth_interp(t, t_series_last, t_series_next, rot1, rot2, dt)
 
+    def _night_yaw_err_deg(self, q_target):
+        """Yaw (z) component of the body->target error, in degrees.
+
+        Exact for a pure-z error, approximate otherwise - a simultaneous roll+pitch error
+        contributes a real z term (the same non-commutativity the box maneuver exploits),
+        so this reads high while roll/pitch is still large.
+        """
+        return np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(q_target, self.q_BI).z, -1.0, 1.0)))
+
+    def _night_box_leg_duration(self, tilt_deg):
+        """Leg duration for a box of this tilt, floored by what the wheels can deliver.
+
+        Every leg is a rest-to-rest single-axis slew of `tilt` about body x or y, so both
+        axes are checked and the binding one wins (they share one duration, which keeps
+        the waypoint schedule uniform). `nominal_night_yaw_leg_duration` stays a floor -
+        the limits can only ever slow the maneuver down, never speed it past what was
+        configured.
+        """
+        leg = self.night_yaw_leg_duration
+        if not self.night_yaw_actuator_limit_enable:
+            return leg, "actuator limits disabled"
+
+        wheel_idx = self.controller.get_actuated_axes()
+        tilt_rad = np.radians(abs(tilt_deg))
+        binding = "configured floor"
+        for axis in wheel_idx:
+            t_axis, binding_axis = self.wheel_module.min_feasible_slew_duration(
+                self.M_inertia, np.eye(3)[axis], tilt_rad, wheel_idx,
+                SMOOTHERSTEP_PEAK_RATE, SMOOTHERSTEP_PEAK_ACCEL,
+                margin=self.night_yaw_actuator_margin)
+            if t_axis > leg:
+                leg, binding = t_axis, "axis {:d} leg, {}".format(axis, binding_axis)
+
+        if leg > self.night_yaw_leg_duration_max:
+            print("{}: box leg wants {:.0f}s ({}) - capping at {:.0f}s, wheels will be "
+                  "pushed past the {:.0%} margin".format(
+                      self.mode, leg, binding, self.night_yaw_leg_duration_max,
+                      self.night_yaw_actuator_margin))
+            leg, binding = self.night_yaw_leg_duration_max, "duration cap"
+        return leg, binding
+
+    def _night_plan_yaw_box(self, t):
+        """Size a yaw box maneuver against where nadir will be when the maneuver ends.
+
+        The ask depends on the horizon; the horizon depends on the leg count *and* the
+        per-leg duration, which in turn depends on the tilt the leg count implies - so
+        iterate to a fixed point. It converges in a pass or two: moving the horizon only
+        shifts the ask by the orbital drift over the maneuver, and the leg count is a
+        step function of the ask, so it settles as soon as the count stops changing.
+
+        Returns (yaw_deg, q_series, info, horizon, leg_duration) for the final plan.
+        """
+        horizon = 0.0
+        yaw_deg = q_series = info = None
+        leg = self.night_yaw_leg_duration
+        for _ in range(max(1, self.night_yaw_predict_iters)):
+            if self.night_yaw_predict_enable and horizon > 0.0:
+                T_OI_future, _, _ = self.orbit.calc_T_OI_at(t + horizon)
+                q_target = my_utils.dcm_to_quat(T_OI_future)
+            else:
+                q_target = my_utils.dcm_to_quat(self.orbit.T_OI)
+            yaw_deg = self._night_yaw_err_deg(q_target)
+            q_series, info = yaw_maneuver_waypoints(yaw_deg, max_tilt_deg=self.night_yaw_max_tilt_deg)
+            leg, binding = self._night_box_leg_duration(info['tilt_deg'])
+            info['leg_duration'] = leg
+            info['leg_binding'] = binding
+            horizon_new = leg * (len(q_series) - 1)
+            if not self.night_yaw_predict_enable or horizon_new == horizon:
+                horizon = horizon_new
+                break
+            horizon = horizon_new
+        return yaw_deg, q_series, info, horizon, leg
+
+
     def _nominal_target_rot_at(self, tau):
         """Target R frame for the nominal modes at time tau, as a Rotation.
         nominal_night: plain LVLH, R == O so T_RI = T_OI.
@@ -482,22 +656,114 @@ class Satellite():
         negligible over a ref update."""
         T_OI, r_I, _ = self.orbit.calc_T_OI_at(tau)
         if self.mode == "nominal_day":
-            s_I = self.orbit.nSB_I
-            n_I = -r_I / np.linalg.norm(r_I)
-            r2 = my_utils.cross_product_M31M31(s_I, n_I)
-            n = np.linalg.norm(r2)
-            if n > 1e-3:
-                r2 = r2 / n
-                r3 = my_utils.cross_product_M31M31(s_I, r2)
-                # same triad built from the body axes; T_RI maps the inertial triad onto it
-                b1 = self.day_sun_axis
-                b2 = self._day_secondary_axis
-                b3 = my_utils.cross_product_M31M31(b1, b2)
-                T_RI = np.column_stack([b1, b2, b3]) @ np.row_stack([s_I, r2, r3])
-                self._day_last_rot = my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_RI))
+            rot_triad = self._day_triad_rot_at(tau, r_I=r_I)
+            if rot_triad is not None:
+                self._day_last_rot = rot_triad
             if self._day_last_rot is not None:
-                return self._day_last_rot
+                # the clocking factor right-multiplies: it is a rotation about the BODY
+                # sun axis, so b1 stays on the sun for any phi
+                return self._day_last_rot * Rotation.from_rotvec(
+                    self._day_clock_phi_at(tau) * self.day_sun_axis)
         return my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_OI))
+
+    def _day_triad_rot_at(self, tau, r_I=None):
+        """Sun-pointing TRIAD at tau, before clocking; None when sun is (anti-)parallel
+        to nadir and the triad is undefined. Uses the sun vector propagated to tau, so
+        it is valid for the look-ahead the clocking planner needs, not just for now."""
+        s_I, _, r_I = self.orbit.calc_sun_vector_at(tau, r_I=r_I)
+        n_I = -r_I / np.linalg.norm(r_I)
+        r2 = my_utils.cross_product_M31M31(s_I, n_I)
+        n = np.linalg.norm(r2)
+        if n <= 1e-3:
+            return None
+        r2 = r2 / n
+        r3 = my_utils.cross_product_M31M31(s_I, r2)
+        # same triad built from the body axes; T_RI maps the inertial triad onto it
+        b1 = self.day_sun_axis
+        b2 = self._day_secondary_axis
+        b3 = my_utils.cross_product_M31M31(b1, b2)
+        T_RI = np.column_stack([b1, b2, b3]) @ np.row_stack([s_I, r2, r3])
+        return my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_RI))
+
+    def _day_clock_phi_at(self, tau):
+        """Scheduled clocking angle (rad) about the body sun axis.
+
+        A function of tau only - never of the live q_BI outside the latch instant. That
+        keeps it smooth for the central differences in _update_ref_from_fn, and stops the
+        reference from chasing the body (which would read zero error forever without ever
+        correcting anything).
+        """
+        if not self.day_clock_enable:
+            return 0.0
+        if tau <= self._day_rc_t0:
+            return self._day_phi_out
+        if tau >= self._day_rc_t1:
+            return self._day_phi_out + self._day_dphi
+        s = (tau - self._day_rc_t0) / (self._day_rc_t1 - self._day_rc_t0)
+        s = s*s*s*(s*(s*6 - 15) + 10)       # smootherstep, C2 - same profile as the slews
+        return self._day_phi_out + s * self._day_dphi
+
+    def _day_latch_clocking(self, t):
+        """Pick the sun-phase clocking angles, once, at the night -> day switch.
+
+        phi_out zeroes the unactuated-axis (z) component of the nadir -> sun error now;
+        phi_in zeroes it again for the sun -> nadir handback at the next eclipse entry.
+        Both are closed form: writing the error as q_e (x) q_clock(phi) makes its z
+        component linear in (cos(phi/2), sin(phi/2)), so one atan2 lands the zero exactly.
+        The roll between them is about the sun axis, which is actuated, so it is an
+        ordinary slew sized by the wheel limits.
+        """
+        b1 = self.day_sun_axis
+        self._day_phi_out = self._day_phi_in = self._day_dphi = 0.0
+        self._day_rc_t0 = self._day_rc_t1 = t
+        if not self.day_clock_enable:
+            return
+
+        rot_triad = self._day_triad_rot_at(t)
+        if rot_triad is None:
+            print("{}: sun near nadir at t={:.1f}s, triad undefined - clocking left at 0".format(self.mode, t))
+            return
+
+        # phi_out: zero the z error on the transition we are making right now
+        q0 = my_utils.quat_error(my_utils.conv_Rotation_obj_to_numpy_q(rot_triad), self.q_BI)
+        v0 = np.array([q0.x, q0.y, q0.z])
+        self._day_phi_out = 2*np.arctan2(-v0[2], q0.w*b1[2] + np.cross(v0, b1)[2])
+
+        # phi_in: zero it again on the handback to nadir at the next eclipse entry
+        t_entry = self.orbit.next_eclipse_entry_after(t)
+        rot_triad_entry = None if t_entry is None else self._day_triad_rot_at(t_entry)
+        if rot_triad_entry is None:
+            print("{}: no eclipse entry found ahead of t={:.1f}s - holding one clocking".format(self.mode, t))
+            self._day_phi_in = self._day_phi_out
+        else:
+            q_nadir = my_utils.dcm_to_quat(self.orbit.calc_T_OI_at(t_entry)[0])
+            qf = my_utils.conv_Rotation_obj_to_numpy_q(rot_triad_entry).inverse() * q_nadir
+            vf = np.array([qf.x, qf.y, qf.z])
+            self._day_phi_in = 2*np.arctan2(vf[2], qf.w*b1[2] + np.cross(b1, vf)[2])
+
+        # short way round
+        self._day_dphi = (self._day_phi_in - self._day_phi_out + np.pi) % (2*np.pi) - np.pi
+
+        leg, binding = self.wheel_module.min_feasible_slew_duration(
+            self.M_inertia, b1, abs(self._day_dphi), self.controller.get_actuated_axes(),
+            SMOOTHERSTEP_PEAK_RATE, SMOOTHERSTEP_PEAK_ACCEL,
+            margin=self.night_yaw_actuator_margin)
+        leg = max(leg, 1.0)
+        self._day_rc_t0 = t + self.day_reclock_delay
+        self._day_rc_t1 = self._day_rc_t0 + leg
+        if t_entry is not None and self._day_rc_t1 > t_entry:
+            # pull it as early as possible rather than running past the handback
+            self._day_rc_t0 = max(t, t_entry - leg)
+            self._day_rc_t1 = self._day_rc_t0 + leg
+            if self._day_rc_t1 > t_entry:
+                print("{}: re-clock of {:.1f} deg needs {:.0f}s but only {:.0f}s of sun phase "
+                      "remain - will not finish before handback".format(
+                          self.mode, np.degrees(self._day_dphi), leg, t_entry - t))
+
+        print("{}: clocking latched at t={:.1f}s - phi_out {:+.1f} deg, phi_in {:+.1f} deg, "
+              "re-clock {:+.1f} deg over {:.0f}s from t={:.0f}s ({})".format(
+                  self.mode, t, np.degrees(self._day_phi_out), np.degrees(self._day_phi_in),
+                  np.degrees(self._day_dphi), leg, self._day_rc_t0, binding))
 
     def _nominal_interp_rot_at(self, tau):
         """Moving target composed with the start offset, smootherstepped to identity."""
@@ -559,7 +825,7 @@ class Satellite():
         # which makes the plant unconditionally unstable. frac must stay < 1.
         if self.delta_inertia_frac == 0.0:
             return np.zeros((3,3))
-        return self.delta_inertia_frac * np.diag(np.diag(self.M_inertia) * np.sin(self.delta_inertia_freq * t))
+        return self.delta_inertia_frac * np.diag(np.diag(self.M_inertia_plant) * np.sin(self.delta_inertia_freq * t))
 
     wheels_control_enable = True
     T_ctr_vec = None
@@ -639,12 +905,12 @@ class Satellite():
         self.T_dist = self.disturbances.calc_torque(self, T_BI, t)
 
         delta_M_inertia = self.calc_delta_M_inertia(t)
-        M_inertia_effective = self.M_inertia + delta_M_inertia
+        M_inertia_effective = self.M_inertia_plant + delta_M_inertia
         M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
 
         # M_inertia_effective_inv = self.M_inertia_inv
 
-        self.H = self.M_inertia@(self.w_BI_B)
+        self.H = self.M_inertia_plant@(self.w_BI_B)
         self.H_total = self.H + self.wheel_module.H_vec
         self.dw_BI_B = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w_BI_B,self.H_total) + self.magt_module.T)
 
@@ -712,7 +978,16 @@ class Satellite():
             return
         if my_utils.magnitude(self.w_BI_B) > self.fd_w_max:
             raise DivergentRate(f"Divergent rate detected, w_sat = {self.w_BI_B*my_utils.RAD_TO_DEG} at time {t}")
-        
+        q_error = my_utils.quat_error(self.q_RI, self.q_BI)
+        err = 2*np.arccos(np.clip(abs(q_error.w), 0.0, 1.0))
+        if err <= self.fd_q_max:
+            self._fd_q_exceed_t0 = None
+        elif self._fd_q_exceed_t0 is None:
+            self._fd_q_exceed_t0 = t
+        elif t - self._fd_q_exceed_t0 >= self.fd_q_persist:
+            raise DivergentAttitude(f"Divergent attitude detected, pointing error {err*my_utils.RAD_TO_DEG:.2f} deg "
+                                    f"above {self.fd_q_max*my_utils.RAD_TO_DEG:g} deg for {self.fd_q_persist:.0f} s at time {t}")
+
     def update_FDIR(self, t):
 
         self.update_fd(t)

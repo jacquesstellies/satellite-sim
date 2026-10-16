@@ -39,7 +39,7 @@ def solve_box_angle(delta_psi_mag):
     Sign of the maneuver is applied separately via `_box(a, reverse=...)` - solving on the
     always-positive `_box_yaw_mag` avoids handing brentq a bracket with no sign change.
     """
-    return brentq(lambda a: _box_yaw_mag(a) - delta_psi_mag, 1e-4, 1.0)
+    return brentq(lambda a: _box_yaw_mag(a) - delta_psi_mag, 1e-4, np.radians(111))
 
 
 def yaw_maneuver_waypoints(total_yaw_deg, n_boxes=None, max_tilt_deg=20.0):
@@ -107,8 +107,12 @@ if __name__ == "__main__":
     # for target in (20.0, -20.0, 85.0, -85.0):
     #     q, info = yaw_maneuver_waypoints(target)
     #     print(target, "->", info)
-    q, info = yaw_maneuver_waypoints(20.0, n_boxes=3)
+    yaw = 50
+    q, info = yaw_maneuver_waypoints(yaw, max_tilt_deg=111)
     print(info)
+    q.append([0.0, 0.0, np.sin(np.radians(yaw)/2), np.cos(np.radians(yaw)/2)])
     print("ref_q_series =", q)
-    times = np.linspace(0, 100, len(q))
+    # times = np.linspace(0, 100, len(q))
+    incr = 80
+    times = [i * incr for i in range(len(q))]
     print("ref_t_series =", [float(t) for t in times])
