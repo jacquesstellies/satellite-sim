@@ -884,6 +884,15 @@ class Controller:
 
         return u
 
+    def get_actuated_axes(self):
+        """Body-axis indices the active control law actually drives.
+        """
+        if self.sub_type in ("Nadafi_BS", "Nadafi_FNDO", "Nadafi_MFNDO") and self.nadafi_controller is not None:
+            return [int(i) for i in self.nadafi_controller.nf_idx]
+        if self.sub_type == "Zarourati" and self.zarourati_controller is not None:
+            return [int(i) for i in self.zarourati_controller.nf_idx]
+        return [0, 1, 2]
+
     def activate_underactuated(self, t, satellite, f_idx, chi_1_init=None):
         """FDIR reconfiguration: hand control to the underactuated controller
         after the fault detector isolates wheel f_idx.
