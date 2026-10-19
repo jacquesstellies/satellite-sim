@@ -233,7 +233,71 @@ class WheelModule():
 
         self.H_vec = self.D @ self.H_wheels
         self.dH_vec = self.D @ self.dH_wheels
-    
+
+    def min_feasible_slew_duration(self, M_inertia, axis, angle_rad, wheel_idx,
+                                   peak_rate_coef, peak_accel_coef, margin=0.5,
+                                   use_speed_headroom=True):
+        """Shortest duration for a single-axis slew that stays inside wheel limits.
+
+        A rest-to-rest slew of `angle_rad` about body axis `axis` (a unit 3-vector) over
+        duration T, with a timing profile whose peak |s'| / |s''| over the normalised leg
+        are `peak_rate_coef` / `peak_accel_coef`, demands
+
+            peak body rate   w = peak_rate_coef  * angle / T       (about `axis`)
+            peak body accel  a = peak_accel_coef * angle / T^2
+
+        so wheel i must store momentum |(J @ axis)[i]|*w and deliver torque
+        |(J @ axis)[i]|*a - the off-diagonal inertia terms are why a pure-x slew still
+        loads the y wheel. Each constraint is inverted for T (momentum ~ 1/T, torque ~
+        1/T^2) and the binding one over `wheel_idx` (the actuated wheels) is returned.
+
+        `margin` is the fraction of each limit the *reference* may ask for, leaving the
+        rest for feedback effort, disturbances and the gyroscopic w x H term this
+        open-loop sizing neglects. Assumes diagonal D (ortho layout: wheel i <-> body
+        axis i), matching the nf_idx-as-body-axis assumption the UATCs already make.
+
+        Returns (T_min, binding) where `binding` names the constraint that set it.
+        """
+        if not np.allclose(self.D, np.diag(np.diag(self.D))):
+            raise Exception("min_feasible_slew_duration: only supports diagonal D (ortho layout)")
+
+        angle = abs(float(angle_rad))
+        T_min, binding = 0.0, "none"
+        if angle == 0.0:
+            return T_min, binding
+
+        axis = np.asarray(axis, dtype=float)
+        axis = axis / np.linalg.norm(axis)
+        H_axis = M_inertia @ axis      # body momentum/torque direction for this slew
+
+        for i in wheel_idx:
+            wheel = self.wheels[i]
+            coupling = abs(H_axis[i])
+            if coupling == 0.0:
+                continue
+
+            # Momentum: headroom shrinks as the wheel spins up, so a maneuver that was
+            # feasible from rest may not be from a biased wheel.
+            if use_speed_headroom:
+                dw_avail = max(wheel.w_max - abs(wheel.w), 0.0)
+            else:
+                dw_avail = wheel.w_max
+            H_avail = margin * dw_avail * wheel.M_inertia_fast
+            if H_avail <= 1e-12:
+                return float('inf'), "wheel {:d} momentum (no headroom, w={:.1f}/{:.1f} rad/s)".format(
+                    i, wheel.w, wheel.w_max)
+            T_mom = coupling * peak_rate_coef * angle / H_avail
+            if T_mom > T_min:
+                T_min, binding = T_mom, "wheel {:d} momentum".format(i)
+
+            T_avail = margin * wheel.T_max
+            if np.isfinite(T_avail) and T_avail > 0.0:
+                T_tor = np.sqrt(coupling * peak_accel_coef * angle / T_avail)
+                if T_tor > T_min:
+                    T_min, binding = T_tor, "wheel {:d} torque".format(i)
+
+        return T_min, binding
+
     # calc_state_rates_optmized
 
     def calc_state_outputs(self, t, state):

@@ -13,6 +13,15 @@ from orbit import Disturbances, Orbit
 from observer import ObserverModule, FNDOFaultDetector
 from route_planner import yaw_maneuver_waypoints
 
+# Peak |s'| and |s''| of the quintic smootherstep s = 6t^5 - 15t^4 + 10t^3 used by
+# _tracking_q_ref_at, over t in [0,1]. s' = 30t^2(1-t)^2 peaks at 1.875 (t=0.5); s''
+# peaks at 5.7735 (t = (3 -+ sqrt(3))/6). Exact, not fitted: _tracking_q_ref_at composes
+# a fixed rotation with a one-parameter subgroup about a fixed axis, so the body-frame
+# rate/accel of the path are exactly s'(t)*rel and s''(t)*rel.
+SMOOTHERSTEP_PEAK_RATE = 1.875
+SMOOTHERSTEP_PEAK_ACCEL = 5.7735
+
+
 class DivergentRate(Exception):
     pass
 
@@ -228,9 +237,25 @@ class Satellite():
         self.night_yaw_cooldown = config['satellite'].get('nominal_night_yaw_cooldown', 60.0)
         self.night_yaw_max_attempts = config['satellite'].get('nominal_night_yaw_max_attempts', 4)
         self.night_yaw_min_improve = config['satellite'].get('nominal_night_yaw_min_improve', 0.7)
+        
+        # A box takes minutes, over which nadir rotates at orbital rate (~0.063 deg/s), so
+        # sizing the yaw against nadir *now* is stale by ~10 deg before the box even ends.
+        # Size it against the propagated nadir frame at maneuver end instead.
+        self.night_yaw_predict_enable = config['satellite'].get('nominal_night_yaw_predict_enable', True)
+        self.night_yaw_predict_iters = config['satellite'].get('nominal_night_yaw_predict_iters', 3)
 
-        # nominal_day: body axis pointed at the sun (default +x, the EOSSAT solar panels'
-        # mean normal); body z is kept as near nadir as the sun constraint allows.
+        # Each box leg is a rest-to-rest single-axis slew of `tilt`, so its peak wheel
+        # torque/momentum demand is set by the leg duration. Size that duration from the
+        # actual wheel limits rather than trusting a hand-set constant: momentum scales
+        # as 1/T and torque as 1/T^2, so a leg that is merely "slow-looking" can still be
+        # the thing that saturates a wheel and winds the FNDO integrator up.
+        self.night_yaw_actuator_limit_enable = config['satellite'].get('nominal_night_yaw_actuator_limit_enable', True)
+        self.night_yaw_actuator_margin = config['satellite'].get('nominal_night_yaw_actuator_margin', 0.5)
+        self.night_yaw_leg_duration_max = config['satellite'].get('nominal_night_yaw_leg_duration_max', 600.0)
+
+        # nominal_day: body z is pinned along -v and body x takes the sun as closely as
+        # that allows (see _day_rot_at). day_z_sign flips z to +v; the two are equivalent
+        # on sun incidence, so pick on whatever else constrains the spacecraft.
         self.day_sun_axis = np.array(config['satellite'].get('nominal_day_sun_axis', [1.0, 0.0, 0.0]), dtype=float)
         self.day_sun_axis /= np.linalg.norm(self.day_sun_axis)
         # body counterpart of the inertial triad's second axis (sun x nadir), with z -> nadir
@@ -384,7 +409,8 @@ class Satellite():
                     # Yaw (z) component of the body->target error, as an angle (rad for a
                     # pure-z rotation; approximate otherwise) - this is specifically the
                     # unactuated-axis error, not the full 3-axis error.
-                    err_deg_unactuated = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
+                    # err_deg_unactuated = np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).z, -1.0, 1.0)))
+                    err_deg_unactuated = self._night_yaw_err_deg(new_q_RI)
                     err_deg_total = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
 
                     start_box = (abs(err_deg_unactuated) > self.night_interp_threshold_deg
@@ -408,18 +434,19 @@ class Satellite():
                             start_box = False
 
                     if start_box:
-                        q_series, info = yaw_maneuver_waypoints(err_deg_unactuated, max_tilt_deg=self.night_yaw_max_tilt_deg)
+                        yaw_deg, q_series, info, horizon, leg = self._night_plan_yaw_box(t)
                         rot_start = my_utils.conv_numpy_to_Rotation_obj_q(self.q_BI)
                         self._night_box_rots = [rot_start * Rotation.from_quat(q) for q in q_series]
                         n_legs = len(self._night_box_rots) - 1
-                        self._night_box_times = t + self.night_yaw_leg_duration * np.arange(len(self._night_box_rots))
+                        self._night_box_times = t + leg * np.arange(len(self._night_box_rots))
                         self._night_box_active = True
                         self._night_box_attempts += 1
                         self._night_box_prev_err = err_deg_unactuated
-                        print("{}: yaw error {:.2f} deg at t={:.2f}s, executing {:d}-leg "
-                              "box maneuver (tilt={:.1f} deg) over {:.1f}s [pass {:d}/{:d}]".format(
-                                  self.mode, err_deg_unactuated, t, n_legs, info['tilt_deg'],
-                                  self.night_yaw_leg_duration * n_legs,
+                        print("{}: yaw error {:.2f} deg at t={:.2f}s, targeting {:.2f} deg at "
+                              "t+{:.0f}s, executing {:d}-leg box (tilt={:.1f} deg, leg={:.0f}s "
+                              "set by {}) over {:.1f}s [pass {:d}/{:d}]".format(
+                                  self.mode, err_deg_unactuated, t, yaw_deg, horizon, n_legs,
+                                  info['tilt_deg'], leg, info['leg_binding'], leg * n_legs,
                                   self._night_box_attempts, self.night_yaw_max_attempts))
                         self._tracking_update_ref_project_smooth_interp(
                             t, self._night_box_times[0], self._night_box_times[1],
@@ -513,6 +540,80 @@ class Satellite():
                 rot1 = rots[i]
                 rot2 = rots[i + 1]
                 self._tracking_update_ref_project_smooth_interp(t, t_series_last, t_series_next, rot1, rot2, dt)
+
+    def _night_yaw_err_deg(self, q_target):
+        """Yaw (z) component of the body->target error, in degrees.
+
+        Exact for a pure-z error, approximate otherwise - a simultaneous roll+pitch error
+        contributes a real z term (the same non-commutativity the box maneuver exploits),
+        so this reads high while roll/pitch is still large.
+        """
+        return np.degrees(2 * np.arcsin(np.clip(my_utils.quat_error(q_target, self.q_BI).z, -1.0, 1.0)))
+
+    def _night_box_leg_duration(self, tilt_deg):
+        """Leg duration for a box of this tilt, floored by what the wheels can deliver.
+
+        Every leg is a rest-to-rest single-axis slew of `tilt` about body x or y, so both
+        axes are checked and the binding one wins (they share one duration, which keeps
+        the waypoint schedule uniform). `nominal_night_yaw_leg_duration` stays a floor -
+        the limits can only ever slow the maneuver down, never speed it past what was
+        configured.
+        """
+        leg = self.night_yaw_leg_duration
+        if not self.night_yaw_actuator_limit_enable:
+            return leg, "actuator limits disabled"
+
+        wheel_idx = self.controller.get_actuated_axes()
+        tilt_rad = np.radians(abs(tilt_deg))
+        binding = "configured floor"
+        for axis in wheel_idx:
+            t_axis, binding_axis = self.wheel_module.min_feasible_slew_duration(
+                self.M_inertia, np.eye(3)[axis], tilt_rad, wheel_idx,
+                SMOOTHERSTEP_PEAK_RATE, SMOOTHERSTEP_PEAK_ACCEL,
+                margin=self.night_yaw_actuator_margin)
+            if t_axis > leg:
+                leg, binding = t_axis, "axis {:d} leg, {}".format(axis, binding_axis)
+
+        if leg > self.night_yaw_leg_duration_max:
+            print("{}: box leg wants {:.0f}s ({}) - capping at {:.0f}s, wheels will be "
+                  "pushed past the {:.0%} margin".format(
+                      self.mode, leg, binding, self.night_yaw_leg_duration_max,
+                      self.night_yaw_actuator_margin))
+            leg, binding = self.night_yaw_leg_duration_max, "duration cap"
+        return leg, binding
+
+    def _night_plan_yaw_box(self, t):
+        """Size a yaw box maneuver against where nadir will be when the maneuver ends.
+
+        The ask depends on the horizon; the horizon depends on the leg count *and* the
+        per-leg duration, which in turn depends on the tilt the leg count implies - so
+        iterate to a fixed point. It converges in a pass or two: moving the horizon only
+        shifts the ask by the orbital drift over the maneuver, and the leg count is a
+        step function of the ask, so it settles as soon as the count stops changing.
+
+        Returns (yaw_deg, q_series, info, horizon, leg_duration) for the final plan.
+        """
+        horizon = 0.0
+        yaw_deg = q_series = info = None
+        leg = self.night_yaw_leg_duration
+        for _ in range(max(1, self.night_yaw_predict_iters)):
+            if self.night_yaw_predict_enable and horizon > 0.0:
+                T_OI_future, _, _ = self.orbit.calc_T_OI_at(t + horizon)
+                q_target = my_utils.dcm_to_quat(T_OI_future)
+            else:
+                q_target = my_utils.dcm_to_quat(self.orbit.T_OI)
+            yaw_deg = self._night_yaw_err_deg(q_target)
+            q_series, info = yaw_maneuver_waypoints(yaw_deg, max_tilt_deg=self.night_yaw_max_tilt_deg)
+            leg, binding = self._night_box_leg_duration(info['tilt_deg'])
+            info['leg_duration'] = leg
+            info['leg_binding'] = binding
+            horizon_new = leg * (len(q_series) - 1)
+            if not self.night_yaw_predict_enable or horizon_new == horizon:
+                horizon = horizon_new
+                break
+            horizon = horizon_new
+        return yaw_deg, q_series, info, horizon, leg
+
 
     def _nominal_target_rot_at(self, tau):
         """Target R frame for the nominal modes at time tau, as a Rotation.
