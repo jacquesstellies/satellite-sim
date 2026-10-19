@@ -457,7 +457,7 @@ class Disturbances():
         # body frame. nadir in inertial is nIB_I (= -r_hat); rotate it into body.
         u_e = T_BI @ self.orbit.nIB_I
 
-        T_grav = 3*MU/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia@u_e)
+        T_grav = 3*MU/pow(self.orbit.radius,3)*my_utils.cross_product_M31M31(u_e,satellite.M_inertia_plant@u_e)
         return T_grav
 
     def calc_solar_radiation_pressure_torque(self, satellite, T_BI):
