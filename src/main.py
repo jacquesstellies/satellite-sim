@@ -25,9 +25,9 @@ ROOT_DIR = os.popen("git rev-parse --show-toplevel").read().strip()
 # results_data = my_globals.results_data
 
 ## Reference Frames:
-# G -> ECI (Earth Centered Inertial)
+# I -> Earth Centered Inertial (ECI)
 # B -> Body Frame (Satellite Body Frame)
-# I -> Body Inertial Frame (Non-Rotating wrt ECI)
+# G -> Earth Frame (ECEF)
 # S -> Sun Frame
 
 ## Name conventions:
@@ -459,8 +459,8 @@ def main():
                     if config['output']['visualizer']['publish'] is True:
                         url = f"http://{host}:{port}/api/telemetry/update"
                         response = requests.post(url, json=visualizer_dict)
-                        print(f"Visualizer publish: {response.status_code}")
-                        print(f"link: http://{host}:{port}/satellite-visualizer/telemetry-viewer.html?scenario={json.loads(response.text)['scenarioId']}")
+                        simulation.logger.log(f"Visualizer publish: {response.status_code}", to_file=True)
+                        simulation.logger.log(f"link: http://{host}:{port}/satellite-visualizer/telemetry-viewer.html?scenario={json.loads(response.text)['scenarioId']}", to_file=True)
                         if not response.ok:
                             print(response.text)
                     else:
