@@ -254,6 +254,8 @@ class Satellite():
         if self.mode == "sinusoidal":
             self.sinusoidal_ref_amplitude = np.array(config['satellite']['sinusoidal_ref_amplitude_deg']) * my_utils.DEG_TO_RAD
             self.sinusoidal_ref_frequency = np.array(config['satellite']['sinusoidal_ref_frequency'])
+
+        self.auto_switch = config['satellite'].get('auto_switch', True)
         
     def calc_face_properties(self):
         # per instance: the class-level list would keep accumulating faces (and so
@@ -283,20 +285,22 @@ class Satellite():
         self.M_inertia = self.calc_M_inertia_body()
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
 
-    def update_mode(self):
+    auto_switch = True
+    def update_mode(self, t):
         mode_prev = self.mode
         if self.init == True:
             if self.config['simulation']['verbose']:
                 print("MODE STARTUP \t ", self.mode)
         if self.mode == "ref_pointing":
             return
-        # if self.orbit.eclipse:
-        #     self.mode = "nominal_night"
-        # else:
-        #     self.mode = "nominal_day"
+        if self.auto_switch:
+            if self.mode == "nominal_day" and self.orbit.eclipse:
+                self.mode = "nominal_night"
+            if self.mode == "nominal_night" and not self.orbit.eclipse:
+                self.mode = "nominal_day"
 
         if self.mode != mode_prev:
-            print("MODE SWITCH \t ", mode_prev, " -> ", self.mode)
+            print("MODE SWITCH \t ", mode_prev, " -> ", self.mode, " at t = ", t, "s")
 
     t_ref_update = 0
     q_RI_series_index = 0
@@ -326,7 +330,7 @@ class Satellite():
             self.next_t_ref_update = t + self.next_t_ref_update_interval
         else:
             return
-        self.update_mode()
+        self.update_mode(t)
 
         if self.init and self.mode not in ("ref_pointing", "tracking"):
             if self.mode == "nominal_night" or self.mode == "nominal_day":
