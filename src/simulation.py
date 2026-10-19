@@ -1,5 +1,5 @@
 from observer import WheelExtendedStateObserver, ObserverModule
-from satellite import Satellite, DivergentRate
+from satellite import Satellite, DivergentRate, DivergentAttitude
 from controller import Controller
 from fault import Fault, FaultModule
 from wheels import WheelModule
@@ -174,8 +174,7 @@ class Simulation:
         self.sim_time_series = np.arange(0, self.sim_time, max_step)
         try:
             sol = self._integrate(max_step)
-        except DivergentRate:
-            # print("divergent rate hit")
+        except (DivergentRate, DivergentAttitude):
             return -1
         
         if sol.status != 0:
