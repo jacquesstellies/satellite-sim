@@ -155,6 +155,50 @@ class Orbit():
         # Rows of the passive DCM T_OI are the O-frame axes in I coords (v_O = T_OI v_I).
         return np.row_stack([x, y, z]), r, v
 
+    def calc_sun_vector_at(self, t_runtime, r_I=None):
+        """Sun unit vector seen from the satellite at an arbitrary run time.
+
+        Returns (nSB_I, rSI_I, r_I). Pass r_I if the caller already propagated the orbit
+        at this time, to avoid a second SGP4 call.
+        """
+        if r_I is None:
+            _, r_I, _ = self.calc_T_OI_at(t_runtime)
+        rSI_I, _, _ = self.get_sun_position(self.jd + t_runtime/86400)
+        rSB_I = rSI_I - r_I
+        return rSB_I/np.linalg.norm(rSB_I), rSI_I, r_I
+
+    def eclipse_at(self, t_runtime):
+        """Eclipse flag at an arbitrary run time, without touching orbit state."""
+        _, r_I, _ = self.calc_T_OI_at(t_runtime)
+        _, rSI_I, _ = self.calc_sun_vector_at(t_runtime, r_I=r_I)
+        return self.check_sun_eclipse(r_I, rSI_I)
+
+    def next_eclipse_entry_after(self, t_runtime, horizon=None, step=30.0):
+        """Run time of the next sunlit -> eclipse crossing after t_runtime, or None.
+
+        Coarse scan for the sign change then bisection. Used by the day-mode clocking
+        planner, which needs to know where nadir will be when the satellite is handed
+        back to nadir pointing.
+        """
+        if horizon is None:
+            horizon = 1.5*self.period
+        t_end = t_runtime + horizon
+        t, prev = t_runtime, self.eclipse_at(t_runtime)
+        while t < t_end:
+            t_next = min(t + step, t_end)
+            cur = self.eclipse_at(t_next)
+            if cur and not prev:
+                lo, hi = t, t_next
+                for _ in range(40):
+                    mid = 0.5*(lo + hi)
+                    if self.eclipse_at(mid):
+                        hi = mid
+                    else:
+                        lo = mid
+                return 0.5*(lo + hi)
+            prev, t = cur, t_next
+        return None
+
     next_t_sample: float = 0.0
     # orbital parameters update
     def calc_orbit_state(self, t_runtime):
