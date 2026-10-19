@@ -15,6 +15,10 @@ from route_planner import yaw_maneuver_waypoints
 
 class DivergentRate(Exception):
     pass
+
+class DivergentAttitude(Exception):
+    pass
+
 class Face():
     r_com_to_cop = np.zeros(3)
     area = 0
@@ -712,7 +716,16 @@ class Satellite():
             return
         if my_utils.magnitude(self.w_BI_B) > self.fd_w_max:
             raise DivergentRate(f"Divergent rate detected, w_sat = {self.w_BI_B*my_utils.RAD_TO_DEG} at time {t}")
-        
+        q_error = my_utils.quat_error(self.q_RI, self.q_BI)
+        err = 2*np.arccos(np.clip(abs(q_error.w), 0.0, 1.0))
+        if err <= self.fd_q_max:
+            self._fd_q_exceed_t0 = None
+        elif self._fd_q_exceed_t0 is None:
+            self._fd_q_exceed_t0 = t
+        elif t - self._fd_q_exceed_t0 >= self.fd_q_persist:
+            raise DivergentAttitude(f"Divergent attitude detected, pointing error {err*my_utils.RAD_TO_DEG:.2f} deg "
+                                    f"above {self.fd_q_max*my_utils.RAD_TO_DEG:g} deg for {self.fd_q_persist:.0f} s at time {t}")
+
     def update_FDIR(self, t):
 
         self.update_fd(t)
