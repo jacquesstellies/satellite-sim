@@ -427,6 +427,8 @@ plot_symbols = {
     # Attitude
     'q_sat':                     (r'q', ''),
     'q_sat_ref':                 (r'q', 'd'),
+    'q_nadir_ref':               (r'q', 'n'),
+    'q_sun_ref':                 (r'q', 's'),
     'q_sat_error':               (r'q', 'e'),
     'w_sat':                     (r'\omega', ''),
     'w_sat_ref':                 (r'\omega', 'd'),
@@ -446,12 +448,14 @@ plot_symbols = {
     'control_energy':            (r'E', 'c'),
     # Wheels
     'w_wheels':                  (r'\omega', 'w'),
+    'H_wheels':                  (r'h', 'w'),
     'w_wheels_est':              (r'\hat{\omega}', 'w'),
     'dw_wheels_est':             (r'\dot{\hat{\omega}}', 'w'),
     'T_wheels':                  (r'T', 'w'),
     'T_wheels_est':              (r'\hat{T}', 'w'),
     'T_ctr_wheels':              (r'T', 'c'),
     'f_wheels':                  (r'f', 'w'),
+    'f_wheels_fault':            (r'f', r'w\mathrm{fault}'),
     'f_wheels_est':              (r'\hat{f}', 'w'),
     'f_wheels_error':            (r'f', 'e'),
     'u_a':                       (r'u', 'a'),
@@ -465,6 +469,11 @@ plot_symbols = {
     'v_sat_eci':                 (r'v', ''),
     'n_sun':                     (r'n', 's'),
     'n_nadir':                   (r'n', 'n'),
+    'eclipse':                   (r'e', ''),
+    # Solar panels
+    'cos_panel':                 (r'c', 'p'),
+    'cos_factor':                (r'c', ''),
+    'cos_factor_int':            (r'\int c\,dt', ''),
     'd':                         (r'd', ''),
     'f_wheels_acc':              (r'f', r'w\mathrm{acc}'),
     # Nadafi backstepping / FNDO auxiliaries
@@ -691,6 +700,7 @@ def build_results_plots(config):
         detail.append(('H_wheels', wheel_axes, r'Wheel angular momentum $\mathbf{h}_w$ ($\mathrm{N \cdot m \cdot s}$)'))
         detail.append(('E', wheel_axes, r'Actuator authority $\mathbf{E}$ (fraction)'))
         detail.append(('f_wheels', wheel_axes, r'Wheel disturbance torque $\mathbf{f}_w$ ($\mathrm{N \cdot m}$)'))
+        detail.append(('f_wheels_fault', wheel_axes, r'Wheel fault torque $\mathbf{f}_{w\mathrm{fault}}$ ($\mathrm{N \cdot m}$)'))
         detail.append(('u_a', wheel_axes, r'Additive fault $\mathbf{u}_a$ ($\mathrm{N \cdot m}$)'))
         if config['observer']['enable']:
             detail.append(('w_wheels_est', wheel_axes, r'Estimated wheel speed $\hat{\boldsymbol{\omega}}_w$ (rad/s)'))
@@ -718,6 +728,13 @@ def build_results_plots(config):
     detail.append(('v_sat_eci', xyz_axes, r'Satellite velocity ECI $\mathbf{v}$ (km/s)'))
     detail.append(('n_sun', xyz_axes, r'Sun vector $\mathbf{n}_s$ (unitless)'))
     detail.append(('n_nadir', xyz_axes, r'Nadir vector $\mathbf{n}_n$ (unitless)'))
+
+    detail.append(('eclipse', ['none'], r'Eclipse $e$ (1 = in shadow)'))
+    if config['satellite']['dimensions']['model'] == "EOSSAT":
+        # sun incidence cosine per panel, area-weighted mean, and its time integral
+        detail.append(('cos_panel', ['0', '1'], r'Solar panel incidence $\cos\alpha$'))
+        detail.append(('cos_factor', ['none'], r'Solar panel cos factor $c$ (area-weighted)'))
+        detail.append(('cos_factor_int', ['none'], r'Integrated cos factor $\int c\,dt$ (s)'))
 
     if config['satellite']['mode'] == "nominal_night":
         # Boresight (body +z) to nadir angle - the pointing metric this mode
@@ -804,6 +821,13 @@ def create_results_plots(results_data,
     create_plots_comparison([('q_sat', xyz_axes), ('q_sat_ref', xyz_axes)],
                             r'Quaternion $\mathbf{q}$', 'q_sat_vs_ref_vec',
                             results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
+
+    # spacecraft vs raw nadir (nominal_night) / sun (nominal_day) targets; each target
+    # is NaN outside its own mode, so the plot switches with the mode
+    if config['satellite']['mode'] in ('nominal_night', 'nominal_day'):
+        create_plots_comparison([('q_sat', q_axes), ('q_nadir_ref', q_axes), ('q_sun_ref', q_axes)],
+                                r'Quaternion $\mathbf{q}$', 'q_sat_vs_nadir_sun',
+                                results_data, config, LOG_FILE_NAME, LOG_DIR, show=show)
 
     if config['satellite']['wheels_control_enable'] and config['observer']['enable']:
         num_wheels, _ = get_wheel_layout(config)

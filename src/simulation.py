@@ -163,7 +163,7 @@ class Simulation:
         # Integrate satellite dynamics over time
         t_monotonic_end_unix = time.time()
 
-        self.logger.log(f"Simulation took {t_monotonic_end_unix - t_monotonic_start_unix} seconds")
+        self.logger.log(f"Simulation took {t_monotonic_end_unix - t_monotonic_start_unix} seconds", to_results_file=True, to_console=True)
         return sol
     
     def simulate_monte_carlo(self):
@@ -184,32 +184,39 @@ class Simulation:
         return sol
 
     def collect_results(self, sol, use_only_sol=False):
-        
+        # Results go on the logging grid (output.log_t_sample, default every controller
+        # tick), not the integration grid: for long runs with decimated logging the
+        # integration-rate DataFrame was by far the largest thing in memory.
+        t_out = np.arange(0, self.sim_time, self.logger.log_t_sample)
+
         for i,axis in enumerate(my_utils.xyz_axes):
-            self.results_data[f'w_sat_{axis}'] = np.interp(self.sim_time_series, sol.t, sol.y[i])
+            self.results_data[f'w_sat_{axis}'] = np.interp(t_out, sol.t, sol.y[i])
 
         for i,axis in enumerate(my_utils.q_axes):
-            self.results_data[f'q_sat_{axis}'] = np.clip(np.interp(self.sim_time_series, sol.t, sol.y[i+3]), -1, 1)
+            self.results_data[f'q_sat_{axis}'] = np.clip(np.interp(t_out, sol.t, sol.y[i+3]), -1, 1)
             
         for i,axis in enumerate(my_utils.xyz_axes):
-            self.results_data[f'control_energy_{axis}'] = np.interp(self.sim_time_series, sol.t, sol.y[i+7])
+            self.results_data[f'control_energy_{axis}'] = np.interp(t_out, sol.t, sol.y[i+7])
         
-        # Put results into data object
+        # Put results into data object (states above are already on t_out)
+        from_sol = {f'{name}_{axis}' for name in ('w_sat', 'control_energy') for axis in my_utils.xyz_axes} \
+            | {f'q_sat_{axis}' for axis in my_utils.q_axes}
         for key, value in self.results_data.items():
-            if key == 'time':
+            if key == 'time' or key in from_sol:
                 continue
             if len(value) == len(self.results_data['time']):
-                self.results_data[key] = np.interp(self.sim_time_series, self.results_data['time'], value)[:]
+                self.results_data[key] = np.interp(t_out, self.results_data['time'], value)[:]
             
         for key, value in self.results_data.items():
-            if len(value) != len(self.sim_time_series) and key != 'time':
-                self.logger.log(f"Warning: {key} has length {len(value)} but time has length {len(self.sim_time_series)}")
+            if len(value) != len(t_out) and key != 'time':
+                self.logger.log(f"Warning: {key} has length {len(value)} but time has length {len(t_out)}")
         
-        self.results_data['time'] = self.sim_time_series
+        self.results_data['time'] = t_out
         
         self.results_df = pd.DataFrame.from_dict(self.results_data)
 
-        self.results_df['euler_axis_sat'] = self.results_df['q_sat_w'].apply(lambda w: 2*np.arccos(w))
+        # |w|: q and -q are the same attitude, else the angle reads ~360 deg in the w < 0 hemisphere
+        self.results_df['euler_axis_sat'] = 2*np.arccos(np.clip(np.abs(self.results_df['q_sat_w']), 0.0, 1.0))
         self.results_df['euler_axis_sat_deg'] = self.results_df['euler_axis_sat']*180/np.pi
 
         self.results_df['euler_int'] = cumulative_trapezoid(self.results_df['euler_axis_sat'], self.results_df['time'], initial=0)
@@ -239,7 +246,7 @@ class Simulation:
 
         [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = r_sat_error.as_quat().T
         # [self.results_df['q_sat_error_x'], self.results_df['q_sat_error_y'], self.results_df['q_sat_error_z'], self.results_df['q_sat_error_w']] = self.results_df.apply(lambda row: my_utils.get_quaternion_error_Nadafi(row, ), axis=1).T
-        self.results_df['euler_axis_sat_error'] = self.results_df['q_sat_error_w'].apply(lambda w: 2*np.arccos(w))
+        self.results_df['euler_axis_sat_error'] = 2*np.arccos(np.clip(np.abs(self.results_df['q_sat_error_w']), 0.0, 1.0))
         self.results_df['euler_axis_sat_error_deg'] = self.results_df['euler_axis_sat_error'] * 180 / np.pi
         # self.logger.log(f"use_only_sol: {use_only_sol}")
         
@@ -261,6 +268,10 @@ class Simulation:
             self.results_df[f'H_wheels_{str(i)}'] = self.results_df['w_wheels_' + str(i)]*wheel.M_inertia_fast
             self.results_df[f'T_wheels_est_{str(i)}'] = self.results_df['dw_wheels_est_' + str(i)]*wheel.M_inertia_fast
             self.results_df[f'f_wheels_error_{str(i)}'] = self.results_df[f'f_wheels_{str(i)}'] - self.results_df[f'f_wheels_est_{str(i)}']
+
+        # integrated solar panel cos factor (s of equivalent full-sun, normal-incidence exposure)
+        if 'cos_factor' in self.results_df:
+            self.results_df['cos_factor_int'] = cumulative_trapezoid(self.results_df['cos_factor'], self.results_df['time'], initial=0)
 
         self.results_df['H_norm'] = np.sqrt(self.results_df['H_total_x']**2 + self.results_df['H_total_y']**2 + self.results_df['H_total_z']**2)
 

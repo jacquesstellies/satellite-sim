@@ -197,6 +197,8 @@ dipole_Am2 = [0.1, 0.1, 0.1,] # [Am2] magnetorquer dipole moment along each body
 accuracy_enable = true
 energy_enable = true
 log_enable = true
+log_t_sample = 1.0
+
 append_date = false
 pdf_output_enable = true
 log_file_name_overide = "None"

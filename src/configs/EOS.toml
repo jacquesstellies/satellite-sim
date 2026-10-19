@@ -173,6 +173,7 @@ pdf_output_enable = true
 log_file_name_overide = "None"
 separate_plots_display = false
 show_plots = false
+log_t_sample = 1.0
 
 [output.visualizer]
 enable = true
