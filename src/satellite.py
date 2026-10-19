@@ -350,6 +350,9 @@ class Satellite():
     _night_box_prev_err = None
     # last well-defined nominal_day target (see _nominal_target_rot_at)
     _day_last_rot = None
+
+    # latest raw nominal-mode target q_RI (see update_ref_q), None until first computed
+    q_target_RI = None
     def update_ref_q(self, t):
         if t >= self.next_t_ref_update - my_utils.T_EPS:
             self.next_t_ref_update = t + self.next_t_ref_update_interval
@@ -383,6 +386,8 @@ class Satellite():
             if (new_q_RI.w*self.q_RI.w + new_q_RI.x*self.q_RI.x
                     + new_q_RI.y*self.q_RI.y + new_q_RI.z*self.q_RI.z) < 0:
                 new_q_RI = -new_q_RI
+            # raw (unsmoothed) mode target, logged for the nadir/sun comparison plot
+            self.q_target_RI = new_q_RI
             dt = 1e-3
             if self._night_interp_enabled:
                 if self._night_box_active:
