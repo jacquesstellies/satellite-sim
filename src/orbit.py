@@ -75,9 +75,19 @@ class Orbit():
             self.altitude = altitude
         else:
             raise(Exception("invalid altitude given: altitude must be greater than 100km"))
+
+        
+        self.arg_perigee = self.config['orbit'].get('arg_perigee_deg', 0.0) * my_utils.DEG_TO_RAD
+        self.mean_anomaly = self.config['orbit'].get('mean_anomaly_deg', 0.0) * my_utils.DEG_TO_RAD
+
+        self.ltdn = self.config['orbit'].get('ltdn', 09.5)
+
+        tut1 = (self.jd + self.fr - my_utils.J2000) / my_utils.CENT2DAY
+        mean_lon, _, _ = self.sun_ecliptic_parameters(tut1)
+        self.RAAN = (mean_lon + self.ltdn * np.pi / 12) % my_utils.TWOPI
+
         # place into circular sun synchronous orbit
         RAAN_rate = 2*np.pi/(365.26*24*3600)
-        self.RAAN = 15 * my_utils.DEG_TO_RAD
         earth_radius = 6378 # km
         
         J = 1.08263e-3 # Oblateness factor
@@ -92,11 +102,6 @@ class Orbit():
                                     np.sqrt(MU)*J*np.power(earth_radius,2)))
         
         self.period = 2*np.pi*self.radius/np.sqrt(MU/self.radius)
-
-        self.arg_perigee = 0
-
-        if 'mean_anomaly_deg' in self.config['orbit']:
-            self.mean_anomaly = self.config['orbit']['mean_anomaly_deg'] * np.pi / 180
 
         self.propagator = Satrec()
 
