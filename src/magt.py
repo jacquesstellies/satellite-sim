@@ -120,7 +120,7 @@ class MagtModule():
         T = my_utils.cross_product_M31M31(m, B_B)
         return T, m
 
-    def calc_torque(self, q_err_vec, w_sat, H_sat, t, T_BI=None):
+    def calc_torque(self, q_err_vec, w_sat, H_sat, t, T_BI=None, w_ref=None):
         if not self.enable:
             self.T = np.zeros(3)
             self.m = np.zeros(3)
@@ -157,7 +157,13 @@ class MagtModule():
                 # body frame (see dump_gain).
                 H = np.asarray(H_sat, dtype=float)
                 d = self.dead_axis
-                T_dead = (-2.0*self.yaw_zeta*self.yaw_wn*H[d]
+                # Rate term on the dead-axis *error*, not the absolute momentum: with a
+                # moving yaw reference the body must carry H[d] = J*w_ref[d] just to keep
+                # up, and damping that outright leaves a standing lag of 2*zeta*w_ref/wn
+                # (6 deg at wn=0.02 for the -v sun frame's ~1.5e-3 rad/s). Subtracting the
+                # reference momentum makes the loop regulate the error instead.
+                H_ref_d = 0.0 if w_ref is None else self.J_dead*float(np.asarray(w_ref)[d])
+                T_dead = (-2.0*self.yaw_zeta*self.yaw_wn*(H[d] - H_ref_d)
                           + 2.0*self.J_dead*self.yaw_wn**2*q_err_vec[d])
                 H_in_plane = H.copy()
                 H_in_plane[d] = 0.0

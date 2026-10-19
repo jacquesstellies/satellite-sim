@@ -741,7 +741,8 @@ class Satellite():
 
         # Orbit first so B_I is current for magnetorquers and residual dipole.
         self.orbit.calc_orbit_state(t)
-        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI)
+        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI,
+                                     w_ref=self.w_RI_R)
         self.wheel_module.calc_state_rates(t, w_wheels_input, self.T_ctr_wheels)
         
         # Ground-truth per-wheel torque deviation, logged as f_wheels. Same sign convention
@@ -839,7 +840,8 @@ class Satellite():
 
         q_RB =  my_utils.quat_error(self.q_RI, self.q_BI)
         qv_RB = np.array([q_RB.x, q_RB.y, q_RB.z])
-        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI)
+        self.magt_module.calc_torque(qv_RB, self.w_BI_B, self.H + self.wheel_module.H_vec, t, T_BI,
+                                     w_ref=self.w_RI_R)
 
         # derived quantities consistent with the new held inputs (logging, observers)
         self.plant_rates(t, y)
