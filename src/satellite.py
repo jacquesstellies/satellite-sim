@@ -241,6 +241,13 @@ class Satellite():
         self._day_secondary_axis = b2 / np.linalg.norm(b2)
 
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
+        # Pointing-error FD: principal angle of q_RB against the *commanded* reference.
+        # Reference jumps are smoothed from the current attitude, so this stays small
+        # through acquisition and mode switches (~2 deg peak) even when the raw target
+        # jumps 140+ deg; a sustained large error means the controller has lost the ref.
+        self.fd_q_max = config['FDIR']['satellite'].get('q_err_max_deg', 10.0) * my_utils.DEG_TO_RAD
+        self.fd_q_persist = config['FDIR']['satellite'].get('q_err_persist_s', 10.0)
+        self._fd_q_exceed_t0 = None
 
         self.next_t_ref_update_interval = config['controller']['t_sample']
 
