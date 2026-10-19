@@ -23,7 +23,55 @@ class Face():
     r_com_to_cop = np.zeros(3)
     area = 0
     norm_vec = np.zeros(3)
+    solar_panel = False
     
+def face_geometry(model, dimensions):
+    """Surface faces (normal, area, centre of pressure) of the satellite model; the
+    solar panels are flagged with solar_panel = True."""
+    faces = []
+    if model == "rectangular":
+        dim_array = np.array([dimensions['x'], dimensions['y'], dimensions['z']])
+        for i in range(3):
+            for j in range(2):
+                face = Face()
+                face.norm_vec = np.zeros(3)
+                face.norm_vec[i] = 1*(1,-1) [j == 1]
+                face.area = 1
+                for k, axis in enumerate(face.norm_vec):
+                    if axis == 0:
+                        face.area *= dim_array[k]
+                face.r_com_to_cop = face.norm_vec*0.5*dim_array              
+                faces.append(face)
+                # print(face.norm_vec, face.area, face.r_com_to_cop)
+    elif model == "EOSSAT":
+        com_to_cop_array = [[0.0, 0.0, 0.995],
+                            [0.0, 0.0, 0.026],
+                            [0.198, 0.348, 0.514],
+                            [0.198, -0.348, 0.514],
+                            [-0.33, 0.0, 0.514],
+                            [-0.165, 0.459, 0.514],
+                            [-0.165, -0.459, 0.514]
+                            ]
+
+        norms_array = [[0, 0, 1], 
+                       [0, 0, -1],
+                       [0.869, 0.495, 0], # (Solar panel)
+                       [0.869, -0.495, 0], # (Solar panel)
+                       [-1, 0, 0],
+                       [-0.82, 0.572, 0],
+                       [-0.82, -0.572, 0]]
+        
+        areas = [0.579, 0.579, 0.763, 0.763, 0.415, 0.519, 0.519]
+        solar_panels = [2, 3]
+        for i in range(len(com_to_cop_array)):
+            face = Face()
+            face.r_com_to_cop = np.array(com_to_cop_array[i])
+            face.norm_vec = np.array(norms_array[i])
+            face.area = areas[i]
+            face.solar_panel = i in solar_panels
+            faces.append(face)
+    return faces
+
 class Satellite():
     M_inertia : np.ndarray = np.zeros((3,3))
     M_inertia_inv : np.ndarray = np.zeros((3,3))
@@ -88,6 +136,13 @@ class Satellite():
             raise Exception("inertia override must be 3x3 or 3x1 matrix")
         self.M_inertia_inv = np.linalg.inv(self.M_inertia)
 
+        # True plant inertia. M_inertia above is the controller/model value; set
+        # M_Inertia_plant to give the plant a static inertia error (defaults to M_inertia).
+        M_inertia_plant = np.array(config['satellite'].get('M_Inertia_plant', self.M_inertia), dtype=float)
+        if M_inertia_plant.shape == (3,):
+            M_inertia_plant = np.diag(M_inertia_plant)
+        self.M_inertia_plant = M_inertia_plant
+
         self.delta_inertia_frac = config['satellite'].get('delta_inertia_frac', 0.0)
         self.delta_inertia_freq = np.array(config['satellite'].get('delta_inertia_freq', [0.1, 0.2, 0.3]))
         self.disturbances = Disturbances(self.orbit, config)
@@ -101,7 +156,7 @@ class Satellite():
         
         self.w_BI_B = np.array(config['satellite']['w_init_dps']) * my_utils.DEG_TO_RAD
         assert len(self.w_BI_B) == 3, "w_init_dps must be a 3 element array"
-        self.H = self.M_inertia@self.w_BI_B
+        self.H = self.M_inertia_plant@self.w_BI_B
         self.H_total = self.H + self.wheel_module.H_vec
 
         self.E = np.eye(self.wheel_module.num_wheels)
@@ -194,46 +249,19 @@ class Satellite():
             self.sinusoidal_ref_frequency = np.array(config['satellite']['sinusoidal_ref_frequency'])
         
     def calc_face_properties(self):
-        model = self.config['satellite']['dimensions']['model']
-        if model == "rectangular":
-            dim_array = np.array([self.dimensions['x'], self.dimensions['y'], self.dimensions['z']])
-            for i in range(3):
-                for j in range(2):
-                    face = Face()
-                    face.norm_vec = np.zeros(3)
-                    face.norm_vec[i] = 1*(1,-1) [j == 1]
-                    face.area = 1
-                    for k, axis in enumerate(face.norm_vec):
-                        if axis == 0:
-                            face.area *= dim_array[k]
-                    face.r_com_to_cop = face.norm_vec*0.5*dim_array              
-                    self.faces.append(face)
-                    # print(face.norm_vec, face.area, face.r_com_to_cop)
-        elif model == "EOSSAT":
-            com_to_cop_array = [[0.0, 0.0, 0.995],
-                                [0.0, 0.0, 0.026],
-                                [0.198, 0.348, 0.514],
-                                [0.198, -0.348, 0.514],
-                                [-0.33, 0.0, 0.514],
-                                [-0.165, 0.459, 0.514],
-                                [-0.165, -0.459, 0.514]
-                                ]
+        # per instance: the class-level list would keep accumulating faces (and so
+        # double the SRP/aero torques) for every Satellite built in the same process
+        self.faces = face_geometry(self.config['satellite']['dimensions']['model'], self.dimensions)
+        self.solar_panels = [face for face in self.faces if face.solar_panel]
 
-            norms_array = [[0, 0, 1], 
-                           [0, 0, -1],
-                           [0.869, 0.495, 0], # (Solar panel)
-                           [0.869, -0.495, 0], # (Solar panel)
-                           [-1, 0, 0],
-                           [-0.82, 0.572, 0],
-                           [-0.82, -0.572, 0]]
-            
-            areas = [0.579, 0.579, 0.763, 0.763, 0.415, 0.519, 0.519]
-            for i in range(len(com_to_cop_array)):
-                face = Face()
-                face.r_com_to_cop = np.array(com_to_cop_array[i])
-                face.norm_vec = np.array(norms_array[i])
-                face.area = areas[i]
-                self.faces.append(face)
+    def calc_panel_cos(self, T_BI):
+        """Sun incidence cosine per solar panel, clipped at 0 (sun behind the panel)
+        and zeroed in eclipse. nSB_I points satellite -> sun."""
+        if self.orbit.eclipse:
+            return np.zeros(len(self.solar_panels))
+        n_sun_B = T_BI @ self.orbit.nSB_I
+        return np.array([max(0.0, face.norm_vec @ n_sun_B / np.linalg.norm(face.norm_vec))
+                         for face in self.solar_panels])
 
     def calc_M_inertia_body(self):
 
@@ -563,7 +591,7 @@ class Satellite():
         # which makes the plant unconditionally unstable. frac must stay < 1.
         if self.delta_inertia_frac == 0.0:
             return np.zeros((3,3))
-        return self.delta_inertia_frac * np.diag(np.diag(self.M_inertia) * np.sin(self.delta_inertia_freq * t))
+        return self.delta_inertia_frac * np.diag(np.diag(self.M_inertia_plant) * np.sin(self.delta_inertia_freq * t))
 
     wheels_control_enable = True
     T_ctr_vec = None
@@ -643,12 +671,12 @@ class Satellite():
         self.T_dist = self.disturbances.calc_torque(self, T_BI, t)
 
         delta_M_inertia = self.calc_delta_M_inertia(t)
-        M_inertia_effective = self.M_inertia + delta_M_inertia
+        M_inertia_effective = self.M_inertia_plant + delta_M_inertia
         M_inertia_effective_inv = np.linalg.inv(M_inertia_effective)
 
         # M_inertia_effective_inv = self.M_inertia_inv
 
-        self.H = self.M_inertia@(self.w_BI_B)
+        self.H = self.M_inertia_plant@(self.w_BI_B)
         self.H_total = self.H + self.wheel_module.H_vec
         self.dw_BI_B = (M_inertia_effective_inv)@(-1*self.wheel_module.dH_vec + self.T_dist - my_utils.cross_product_M31M31(self.w_BI_B,self.H_total) + self.magt_module.T)
 
