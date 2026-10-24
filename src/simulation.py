@@ -57,6 +57,22 @@ class Simulation:
         self.satellite = Satellite(wheel_module, controller, observer_module, self.fault_module, magt_module, self.logger, orbit=orbit, config=config)
 
         controller.init_satellite(self.satellite)
+
+        # Start already on the nominal target (nadir / sun pointing), overriding
+        # euler_init/q_init and w_init_dps.
+        if config['satellite'].get('nominal_start_on_target', False):
+            if not self.satellite.mode.startswith("nominal"):
+                raise ValueError("nominal_start_on_target requires mode nominal_day or nominal_night, "
+                                 "got {!r}".format(self.satellite.mode))
+            dir_init, w_sat_init = self.satellite.nominal_start_state(0.0)
+            self.satellite.w_BI_B = w_sat_init
+            self.satellite.H = self.satellite.M_inertia_plant @ w_sat_init
+            self.satellite.H_total = self.satellite.H + self.satellite.wheel_module.H_vec
+            if controller.type == "adaptive":
+                controller.quaternion_prev = my_utils.conv_Rotation_obj_to_numpy_q(dir_init)
+            if config['simulation']['verbose']:
+                print("NOMINAL START ON TARGET \t ", self.satellite.mode, " q_BI (xyzw) =", dir_init.as_quat(),
+                      " w_BI_B (dps) =", np.degrees(w_sat_init))
         #------------------------------------------------------------#
         ###################### Set Up Initial Conditions ########################
         self.fault_module.init(wheel_module.num_wheels)
