@@ -98,7 +98,7 @@ class Orbit():
         self.h = math.sqrt(MU*self.radius)
         # print("Orbit radius set to: ", self.radius)
         
-        self.inclination = arccos(np.power(RAAN_rate*(1-np.power(e,2)),2)*np.power(self.radius,7/2)/((-3/2)*
+        self.inclination = arccos(RAAN_rate*np.power(1-np.power(e,2),2)*np.power(self.radius,7/2)/((-3/2)*
                                     np.sqrt(MU)*J*np.power(earth_radius,2)))
         
         self.period = 2*np.pi*self.radius/np.sqrt(MU/self.radius)
@@ -119,7 +119,7 @@ class Orbit():
             WGS72,
             'i',
             1,
-            self.jd,
+            self.jd - 2433281.5, # epoch: days since 1949-12-31 00:00 UT, not a JD
             0.0,
             0.0,
             0.0,
