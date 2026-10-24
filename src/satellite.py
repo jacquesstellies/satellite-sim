@@ -253,17 +253,30 @@ class Satellite():
         self.night_yaw_actuator_margin = config['satellite'].get('nominal_night_yaw_actuator_margin', 0.5)
         self.night_yaw_leg_duration_max = config['satellite'].get('nominal_night_yaw_leg_duration_max', 600.0)
 
-        # nominal_day: body z is pinned along -v and body x takes the sun as closely as
-        # that allows (see _day_rot_at). day_z_sign flips z to +v; the two are equivalent
-        # on sun incidence, so pick on whatever else constrains the spacecraft.
+        # nominal_day target frame, see _day_rot_at:
+        #   "velocity_z" - body z pinned along -v, body x as near the sun as that allows.
+        #                  Costs sun incidence (orbit-average cos ~0.76) to keep the dead
+        #                  axis off the hard part of the day <-> night transition.
+        #   "sun_triad"  - standard sun pointing, body day_sun_axis exactly at the sun
+        #                  (cos = 1) with the free rotation about the sun line spent on
+        #                  getting body z as near nadir as it can.
+        # Default stays "velocity_z" so configs written before the switch keep their
+        # behaviour; "sun_triad" is the comparison baseline.
+        self.day_frame = str(config['satellite'].get('nominal_day_frame', 'velocity_z'))
+        if self.day_frame not in ("velocity_z", "sun_triad"):
+            raise ValueError("nominal_day_frame must be 'velocity_z' or 'sun_triad', got {!r}".format(self.day_frame))
         self.day_sun_axis = np.array(config['satellite'].get('nominal_day_sun_axis', [1.0, 0.0, 0.0]), dtype=float)
         self.day_sun_axis /= np.linalg.norm(self.day_sun_axis)
-        # body counterpart of the inertial triad's second axis (sun x nadir), with z -> nadir
-        z_B = np.array([0.0, 0.0, 1.0])
-        b2 = my_utils.cross_product_M31M31(self.day_sun_axis, z_B)
-        if np.linalg.norm(b2) < 1e-6:
-            raise ValueError("nominal_day_sun_axis must not be parallel to body z (z is held toward nadir)")
-        self._day_secondary_axis = b2 / np.linalg.norm(b2)
+        self.day_z_sign = float(config['satellite'].get('nominal_day_z_sign', -1.0))
+        # sun_triad only: body counterpart of the inertial triad's second axis
+        # (sun x nadir), built with body z standing in for nadir.
+        self._day_secondary_axis = None
+        if self.day_frame == "sun_triad":
+            b2 = my_utils.cross_product_M31M31(self.day_sun_axis, np.array([0.0, 0.0, 1.0]))
+            if np.linalg.norm(b2) < 1e-6:
+                raise ValueError("nominal_day_sun_axis must not be parallel to body z "
+                                 "(z is held toward nadir by the sun_triad frame)")
+            self._day_secondary_axis = b2 / np.linalg.norm(b2)
 
         self.fd_w_max = config['FDIR']['satellite']['w_max_dps'] * my_utils.DEG_TO_RAD
         # Pointing-error FD: principal angle of q_RB against the *commanded* reference.
@@ -418,8 +431,14 @@ class Satellite():
                     err_deg_unactuated = self._night_yaw_err_deg(new_q_RI)
                     err_deg_total = np.degrees(2 * np.arccos(np.clip(my_utils.quat_error(new_q_RI, self.q_BI).w, -1.0, 1.0)))
 
+                    # In sun mode the dead axis is the magnetorquer's job and the target
+                    # only asks ~orbit rate of it, so the box has nothing to add there -
+                    # and firing it on a transition transient throws the attitude away for
+                    # the length of a box.
+                    box_mode_ok = self.mode != "nominal_day"
                     start_box = (abs(err_deg_unactuated) > self.night_interp_threshold_deg
                                  and self.night_yaw_maneuver_enable
+                                 and box_mode_ok
                                  and t >= self._night_box_next_allowed_t)
                     if start_box:
                         # Stop re-arming once passes stop paying for themselves, otherwise
@@ -622,37 +641,108 @@ class Satellite():
 
     def _nominal_target_rot_at(self, tau):
         """Target R frame for the nominal modes at time tau, as a Rotation.
+
         nominal_night: plain LVLH, R == O so T_RI = T_OI.
-        nominal_day: sun pointing - body day_sun_axis exactly at the sun, with the
-        free rotation about the sun line set so body z is as close to nadir as it can
-        get (TRIAD, sun primary, nadir secondary). When the sun is (anti-)parallel to
-        nadir that rotation is undefined, so hold the last valid day target there
-        (LVLH if none yet). Uses the current sun vector: it moves ~1 deg/day,
-        negligible over a ref update."""
-        T_OI, r_I, _ = self.orbit.calc_T_OI_at(tau)
+        nominal_day: see _day_rot_at. Degenerate geometry there holds the last valid
+        day target (LVLH if none yet)."""
+        T_OI, r_I, v_I = self.orbit.calc_T_OI_at(tau)
         if self.mode == "nominal_day":
-            s_I = self.orbit.nSB_I
-            n_I = -r_I / np.linalg.norm(r_I)
-            r2 = my_utils.cross_product_M31M31(s_I, n_I)
-            n = np.linalg.norm(r2)
-            if n > 1e-3:
-                r2 = r2 / n
-                r3 = my_utils.cross_product_M31M31(s_I, r2)
-                # same triad built from the body axes; T_RI maps the inertial triad onto it
-                b1 = self.day_sun_axis
-                b2 = self._day_secondary_axis
-                b3 = my_utils.cross_product_M31M31(b1, b2)
-                T_RI = np.column_stack([b1, b2, b3]) @ np.row_stack([s_I, r2, r3])
-                self._day_last_rot = my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_RI))
+            rot_day = self._day_rot_at(tau, r_I=r_I, v_I=v_I)
+            if rot_day is not None:
+                self._day_last_rot = rot_day
             if self._day_last_rot is not None:
                 return self._day_last_rot
         return my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_OI))
+
+    def _day_rot_at(self, tau, r_I=None, v_I=None):
+        """nominal_day target frame at tau, per nominal_day_frame. None if degenerate."""
+        if r_I is None or v_I is None:
+            _, r_I, v_I = self.orbit.calc_T_OI_at(tau)
+        s_I, _, _ = self.orbit.calc_sun_vector_at(tau, r_I=r_I)
+        if self.day_frame == "sun_triad":
+            return self._day_rot_sun_triad(s_I, r_I)
+        return self._day_rot_velocity_z(s_I, v_I)
+
+    def _day_rot_velocity_z(self, s_I, v_I):
+        """Body z along -v, body x as near the sun as that allows.
+
+        The wheels cannot torque z, so this frame is built to keep the dead axis out
+        of the expensive parts of the problem:
+
+        - z is pinned to -v (day_z_sign flips it to +v). That direction rotates at
+          orbital rate about the orbit normal, which is an actuated-axis motion.
+        - x takes the sun direction projected off z, so the panels get the best
+          incidence the z constraint allows (orbit-average cos ~0.76 on the EOSSAT
+          geometry, vs 1.0 for unconstrained sun pointing).
+
+        What this buys: in steady state the dead axis only has to turn at ~orbit rate
+        (|w_z| <= 1.5e-3 rad/s, needing <= 5.3e-5 Nm against ~3e-4 Nm of magnetorquer
+        authority). It does NOT shorten the day <-> night transition: measured against
+        sun_triad on the EOSSAT geometry the two cost 423 s and 459 s respectively for
+        a three-leg roll/pitch/roll reorientation, so the 24% of sun incidence this
+        frame gives up buys ~8% of transition time.
+
+        Returns None when the sun is (anti-)parallel to z and x is undefined.
+        """
+        z = self.day_z_sign * v_I / np.linalg.norm(v_I)
+        perp = s_I - np.dot(s_I, z) * z          # sun with the z component removed
+        n = np.linalg.norm(perp)
+        if n <= 1e-3:
+            return None
+        x = perp / n
+        y = my_utils.cross_product_M31M31(z, x)
+        # rows of the passive DCM T_RI are the R-frame axes in inertial coords
+        T_RI = np.row_stack([x, y, z])
+        return my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_RI))
+
+    def _day_rot_sun_triad(self, s_I, r_I):
+        """Standard sun pointing (TRIAD, sun primary, nadir secondary).
+
+        Body day_sun_axis points exactly at the sun - full incidence, cos = 1 - and the
+        remaining freedom about the sun line is spent getting body z as near nadir as it
+        can. This is the comparison baseline: it is the best frame for power and the
+        worst for the dead axis, because the day -> night difference is then essentially
+        a rotation about nadir, i.e. about the unactuated body z (~136 deg of yaw on the
+        EOSSAT/SSO geometry).
+
+        Returns None when the sun is (anti-)parallel to nadir and the triad degenerates.
+        """
+        n_I = -r_I / np.linalg.norm(r_I)                 # nadir
+        r2 = my_utils.cross_product_M31M31(s_I, n_I)
+        n = np.linalg.norm(r2)
+        if n <= 1e-3:
+            return None
+        r2 = r2 / n
+        r3 = my_utils.cross_product_M31M31(s_I, r2)
+        # same triad built from the body axes; T_RI maps the inertial triad onto it
+        b1 = self.day_sun_axis
+        b2 = self._day_secondary_axis
+        b3 = my_utils.cross_product_M31M31(b1, b2)
+        T_RI = np.column_stack([b1, b2, b3]) @ np.row_stack([s_I, r2, r3])
+        return my_utils.conv_numpy_to_Rotation_obj_q(my_utils.dcm_to_quat(T_RI))
+
 
     def _nominal_interp_rot_at(self, tau):
         """Moving target composed with the start offset, smootherstepped to identity."""
         s = np.clip((tau - self._night_interp_t0) / (self._night_interp_t1 - self._night_interp_t0), 0.0, 1.0)
         s = s*s*s*(s*(s*6 - 15) + 10)
         return self._nominal_target_rot_at(tau) * Rotation.from_rotvec((1.0 - s) * self._night_interp_offset0.as_rotvec())
+
+    def nominal_start_state(self, t=0.0, dt=1e-3):
+        """Attitude/rate of the nominal-mode target at t, for starting the satellite
+        already on target (nominal_start_on_target). Returns (Rotation, w_BI_B).
+
+        Resolves the startup mode the same way update_mode will at the first tick, so a
+        nominal_day start in eclipse begins on the night (nadir) target when auto_switch
+        is on. Body rate matches the reference rate (~orbit rate for LVLH), so there is
+        no initial rate error either."""
+        if self.auto_switch and self.mode in ("nominal_day", "nominal_night"):
+            self.mode = "nominal_night" if self.orbit.eclipse_at(t) else "nominal_day"
+        rot_at = self._nominal_target_rot_at
+        R0 = rot_at(t)
+        R_fwd = (R0.inv() * rot_at(t + dt)).as_rotvec() / dt
+        R_bwd = (rot_at(t - dt).inv() * R0).as_rotvec() / dt
+        return R0, 0.5 * (R_fwd + R_bwd)
 
     def _update_ref_from_fn(self, rot_at, t, dt = 1e-3):
         """Set q_RI from rot_at(t), and w_RI_R / dw_RI_R (R frame) by central differences."""
