@@ -87,6 +87,8 @@ class NadafiController:
             self.kappa_0 = Nadafi_config['kappa_0']
             self.kappa_1 = Nadafi_config['kappa_1']
             self.bl_eps = Nadafi_config.get('bl_eps', 1e-2)
+            # false: plain explicit Euler on dchi_1 = -kappa_1*L*sat((chi_1 - v_0)/bl_eps)
+            self.chi_1_implicit = Nadafi_config.get('chi_1_implicit', False)
             chi_0_gain = self.kappa_0 * np.sqrt(self.L.max() * self.bl_eps) * self.t_sample / self.bl_eps
             if chi_0_gain > 1.5:
                 print(f"WARNING: FNDO detector chi_0 boundary-layer gain {chi_0_gain:.2f} > 1.5, "
@@ -215,14 +217,19 @@ class NadafiController:
         dchi_0 = v_0 + -1 * self.J_0_r_inv @ u_wheels_prev[self.nf_idx,] + self.F + T_magt_r
         self.chi_0 = self.chi_0 + dchi_0 * self.t_sample
 
-        # semi-implicit (Acary-Brogliato) update of chi_1 -> v_0: explicit Euler
-        # is unstable whenever kappa_1*L*dt > bl_eps and sawtooths at +-kappa_1*L*dt
-        g = np.multiply(self.kappa_1 * self.t_sample, L_r)
-        z = self.chi_1 - v_0
-        z_new = np.where(np.abs(z) >= self.bl_eps + g,
-                         z - np.multiply(g, np.sign(z)),
-                         np.multiply(z, self.bl_eps / (self.bl_eps + g)))
-        self.chi_1 = v_0 + my_utils.col_vec(np.asarray(z_new).ravel())
+        # semi-implicit (Acary-Brogliato) update of chi_1 -> v_0. Here z = chi_1 - v_0
+        # does not depend on chi_1, so explicit Euler has no direct self-loop and was
+        # measured to differ by <~30% in ripple even at kappa_1*L*dt = 15*bl_eps
+        if self.chi_1_implicit:
+            g = np.multiply(self.kappa_1 * self.t_sample, L_r)
+            z = self.chi_1 - v_0
+            z_new = np.where(np.abs(z) >= self.bl_eps + g,
+                             z - np.multiply(g, np.sign(z)),
+                             np.multiply(z, self.bl_eps / (self.bl_eps + g)))
+            self.chi_1 = v_0 + my_utils.col_vec(np.asarray(z_new).ravel())
+        else:
+            dchi_1 = -self.kappa_1 * np.multiply(L_r, np.clip((self.chi_1 - v_0) / self.bl_eps, -1.0, 1.0))
+            self.chi_1 = self.chi_1 + dchi_1 * self.t_sample
 
         self.term_1 = dphi@Aq@(self.Z + phi)
         self.term_2 = (q_err_vec.T @ np.diag([self.lambda_1, self.lambda_2, self.lambda_3]) @ Aq).T
